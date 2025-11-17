@@ -1,0 +1,14 @@
+# SQLite Database
+data.db
+data.db-journal
+data.db-wal
+data.db-shm
+
+# PHP
+*.log
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
