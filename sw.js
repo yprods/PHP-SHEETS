@@ -1,8 +1,10 @@
-const CACHE_NAME = 'feature-manager-v1';
+const CACHE_NAME = 'feature-manager-v2';
 const urlsToCache = [
-  '/',
-  '/index.php',
-  '/manifest.json'
+  './',
+  './index.php',
+  './manifest.json',
+  './chart.umd.min.js',
+  './vis-network.min.js'
 ];
 
 // Install event - cache resources

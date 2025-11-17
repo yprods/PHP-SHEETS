@@ -173,6 +173,17 @@ function initDatabase() {
         FOREIGN KEY (feature_id) REFERENCES features(id)
     )");
     
+    // Email tracking table for line change notifications
+    $db->exec("CREATE TABLE IF NOT EXISTS feature_tracking (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        feature_id INTEGER NOT NULL,
+        email TEXT NOT NULL,
+        user TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (feature_id) REFERENCES features(id),
+        UNIQUE(feature_id, email)
+    )");
+    
     // Create uploads directory if it doesn't exist
     $uploadsDir = __DIR__ . '/uploads';
     if (!is_dir($uploadsDir)) {
@@ -186,6 +197,27 @@ function initDatabase() {
 function getCurrentUser() {
     return isset($_SERVER['AUTH_USER']) ? $_SERVER['AUTH_USER'] : 
            (isset($_SERVER['REMOTE_USER']) ? $_SERVER['REMOTE_USER'] : 'System');
+}
+
+// Send email notification using PHP mail()
+function sendEmailNotification($to, $subject, $message, $featureId, $field, $oldValue, $newValue, $changedBy) {
+    $headers = "From: noreply@" . $_SERVER['HTTP_HOST'] . "\r\n";
+    $headers .= "Reply-To: noreply@" . $_SERVER['HTTP_HOST'] . "\r\n";
+    $headers .= "MIME-Version: 1.0\r\n";
+    $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+    
+    $body = "<html><body dir='rtl' style='font-family: Arial, sans-serif;'>";
+    $body .= "<h2>עדכון פיצ'ר #{$featureId}</h2>";
+    $body .= "<p><strong>השדה שהשתנה:</strong> {$field}</p>";
+    $body .= "<p><strong>ערך ישן:</strong> " . htmlspecialchars($oldValue) . "</p>";
+    $body .= "<p><strong>ערך חדש:</strong> " . htmlspecialchars($newValue) . "</p>";
+    $body .= "<p><strong>שונה על ידי:</strong> {$changedBy}</p>";
+    $body .= "<p><strong>תאריך:</strong> " . date('Y-m-d H:i:s') . "</p>";
+    $body .= "<hr>";
+    $body .= "<p><small>זהו מייל אוטומטי, אנא אל תשיב</small></p>";
+    $body .= "</body></html>";
+    
+    return mail($to, $subject, $body, $headers);
 }
 
 // Handle API requests
@@ -231,6 +263,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->bindValue(4, $value, SQLITE3_TEXT);
             $stmt->bindValue(5, $user, SQLITE3_TEXT);
             $stmt->execute();
+            
+            // Send email notifications to tracked users
+            if ($oldValue !== $value) {
+                $trackResult = $db->query("SELECT email FROM feature_tracking WHERE feature_id = $id");
+                while ($trackRow = $trackResult->fetchArray(SQLITE3_ASSOC)) {
+                    $email = $trackRow['email'];
+                    $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
+                    $stmt->bindValue(1, $id, SQLITE3_INTEGER);
+                    $featResult = $stmt->execute();
+                    $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
+                    $featureName = $featRow['feature'] ?? 'Unknown';
+                    $category = $featRow['category'] ?? '';
+                    
+                    $subject = "עדכון פיצ'ר: {$category} - {$featureName}";
+                    sendEmailNotification($email, $subject, '', $id, $field, $oldValue, $value, $user);
+                }
+            }
             
             echo json_encode(['success' => true, 'message' => 'Saved successfully']);
             exit;
@@ -781,6 +830,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true]);
             exit;
             
+        // Email tracking
+        case 'add_tracking':
+            $featureId = intval($_POST['feature_id']);
+            $email = trim($_POST['email'] ?? '');
+            if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                echo json_encode(['success' => false, 'message' => 'כתובת אימייל לא תקינה']);
+                exit;
+            }
+            $stmt = $db->prepare("INSERT OR IGNORE INTO feature_tracking (feature_id, email, user) VALUES (?, ?, ?)");
+            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
+            $stmt->bindValue(2, $email, SQLITE3_TEXT);
+            $stmt->bindValue(3, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        case 'remove_tracking':
+            $featureId = intval($_POST['feature_id']);
+            $email = trim($_POST['email'] ?? '');
+            $stmt = $db->prepare("DELETE FROM feature_tracking WHERE feature_id = ? AND email = ?");
+            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
+            $stmt->bindValue(2, $email, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        case 'get_tracking':
+            $featureId = intval($_POST['feature_id']);
+            $result = $db->query("SELECT * FROM feature_tracking WHERE feature_id = $featureId ORDER BY created_at DESC");
+            $tracking = [];
+            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+                $tracking[] = $row;
+            }
+            echo json_encode($tracking);
+            exit;
+            
         // Move feature between pages
         case 'move_feature':
             $featureId = intval($_POST['feature_id']);
@@ -855,13 +940,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     <link rel="apple-touch-icon" href="icon-192.png">
     
     <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="chart.umd.min.js"></script>
     
     <!-- vis-network -->
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script type="text/javascript" src="vis-network.min.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
+        /* Using system fonts instead of external font */
         
         * {
             margin: 0;
@@ -884,7 +969,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Arial Hebrew', 'David', sans-serif;
             background: #f3f4f6;
             min-height: 100vh;
             padding: 20px;
@@ -1584,17 +1669,68 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         .comment-item {
-            padding: 12px;
-            border-bottom: 1px solid var(--border-color);
-            margin-bottom: 8px;
+            padding: 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            background: var(--bg-primary);
+            box-shadow: var(--shadow);
+            transition: all 0.2s;
+        }
+        
+        .comment-item:hover {
+            box-shadow: var(--shadow-md);
         }
         
         .comment-header {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .comment-user {
+            font-weight: 600;
+            color: var(--primary-color);
+            font-size: 14px;
+        }
+        
+        .comment-date {
             font-size: 12px;
             color: var(--text-secondary);
+        }
+        
+        .comment-body {
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 14px;
+        }
+        
+        .comment-input-container {
+            background: var(--bg-secondary);
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+        
+        .comment-textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 100px;
+            transition: border-color 0.2s;
+        }
+        
+        .comment-textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
         }
         
         .tag-item {
@@ -1890,6 +2026,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                 <button class="action-btn" onclick="showTags(<?php echo $feat['id']; ?>)" title="תגיות">
                                     <svg class="icon icon-small"><use href="#icon-tag"></use></svg>
                                 </button>
+                                <button class="action-btn" onclick="showEmailTracking(<?php echo $feat['id']; ?>)" title="מעקב אימייל">
+                                    <svg class="icon icon-small"><use href="#icon-settings"></use></svg> 📧
+                                </button>
                                 <button class="action-btn" onclick="showMoveFeature(<?php echo $feat['id']; ?>)" title="העבר דף">
                                     <svg class="icon icon-small"><use href="#icon-page"></use></svg>
                                 </button>
@@ -1957,6 +2096,36 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     <div class="app-footer">מערכות מידע & yprods</div>
     
     <script>
+        // Helper functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function formatDate(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMs / 3600000);
+            const diffDays = Math.floor(diffMs / 86400000);
+            
+            if (diffMins < 1) return 'לפני רגע';
+            if (diffMins < 60) return `לפני ${diffMins} דקות`;
+            if (diffHours < 24) return `לפני ${diffHours} שעות`;
+            if (diffDays < 7) return `לפני ${diffDays} ימים`;
+            
+            return date.toLocaleDateString('he-IL', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+        
         // Auto-link function - makes phone numbers, emails, and URLs clickable
         function autoLink(text) {
             if (!text) return text;
@@ -2086,12 +2255,21 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         // Service Worker Registration for PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('sw.js')
+                navigator.serviceWorker.register('sw.js', { scope: './' })
                     .then(function(registration) {
-                        console.log('ServiceWorker registration successful');
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                        // Check for updates
+                        registration.addEventListener('updatefound', function() {
+                            const newWorker = registration.installing;
+                            newWorker.addEventListener('statechange', function() {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    console.log('New service worker available. Reload to update.');
+                                }
+                            });
+                        });
                     })
                     .catch(function(err) {
-                        console.log('ServiceWorker registration failed: ', err);
+                        console.error('ServiceWorker registration failed: ', err);
                     });
             });
         }
@@ -3317,6 +3495,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 return;
             }
             
+            // Check if vis-network is loaded
+            if (typeof vis === 'undefined' || !vis.Network) {
+                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: ספריית vis-network לא נטענה. אנא ודא שקובץ vis-network.min.js קיים בתיקייה.</p>';
+                console.error('vis-network library not loaded');
+                return;
+            }
+            
             const formData = new FormData();
             formData.append('action', 'get_data');
             formData.append('page_id', currentPageId);
@@ -3525,8 +3710,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 content.innerHTML = `
                     <div id="comments-list" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px;"></div>
                     <div>
-                        <textarea id="new-comment" placeholder="כתוב תגובה..." style="width: 100%; padding: 12px; margin-bottom: 8px; min-height: 80px;"></textarea>
-                        <button class="btn-primary" onclick="addComment(${featureId})">📤 שלח תגובה</button>
+                        <textarea id="new-comment" class="comment-textarea" placeholder="כתוב תגובה..." rows="4"></textarea>
+                        <button class="btn-primary" onclick="addComment(${featureId})" style="margin-top: 8px;">📤 שלח תגובה</button>
                     </div>
                 `;
                 loadComments(featureId, document.getElementById('comments-list'));
@@ -3576,8 +3761,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     </div>
                     <div id="comments-list" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px;"></div>
                     <div>
-                        <textarea id="new-comment" placeholder="כתוב תגובה..." style="width: 100%; padding: 12px; margin-bottom: 8px; min-height: 80px;"></textarea>
-                        <button class="btn-primary" onclick="addComment(${featureId})">📤 שלח תגובה</button>
+                        <textarea id="new-comment" class="comment-textarea" placeholder="כתוב תגובה..." rows="4"></textarea>
+                        <button class="btn-primary" onclick="addComment(${featureId})" style="margin-top: 8px;">📤 שלח תגובה</button>
                     </div>
                 </div>
             `;
@@ -3603,10 +3788,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     container.innerHTML = comments.map(comment => `
                         <div class="comment-item">
                             <div class="comment-header">
-                                <span><strong>${comment.user}</strong></span>
-                                <span>${comment.created_at}</span>
+                                <span class="comment-user">${escapeHtml(comment.user)}</span>
+                                <span class="comment-date">${formatDate(comment.created_at)}</span>
                             </div>
-                            <div>${autoLink(comment.comment)}</div>
+                            <div class="comment-body">${autoLink(escapeHtml(comment.comment))}</div>
                         </div>
                     `).join('');
                 }
@@ -3944,6 +4129,110 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         // Tags
+        // Email tracking
+        function showEmailTracking(featureId) {
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.id = 'email-tracking-modal';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>מעקב אימייל - פיצ'ר #${featureId}</h3>
+                        <button class="close-btn" onclick="closeModal('email-tracking-modal')">×</button>
+                    </div>
+                    <div id="tracking-list" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px;"></div>
+                    <div class="comment-input-container">
+                        <input type="email" id="tracking-email" placeholder="הזן כתובת אימייל למעקב..." style="width: 100%; padding: 12px; margin-bottom: 8px; border: 2px solid var(--border-color); border-radius: 6px; font-size: 14px;">
+                        <button class="btn-primary" onclick="addEmailTracking(${featureId})">➕ הוסף מעקב</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            loadEmailTracking(featureId);
+        }
+        
+        function loadEmailTracking(featureId) {
+            const formData = new FormData();
+            formData.append('action', 'get_tracking');
+            formData.append('feature_id', featureId);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(tracking => {
+                const container = document.getElementById('tracking-list');
+                if (tracking.length === 0) {
+                    container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">אין כתובות אימייל במעקב</p>';
+                } else {
+                    container.innerHTML = tracking.map(item => `
+                        <div class="comment-item">
+                            <div class="comment-header">
+                                <span class="comment-user">${escapeHtml(item.email)}</span>
+                                <button class="delete-btn" onclick="removeEmailTracking(${featureId}, '${escapeHtml(item.email)}')" style="padding: 4px 8px; font-size: 12px;">🗑️ הסר</button>
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">נוסף על ידי: ${escapeHtml(item.user)} | ${formatDate(item.created_at)}</div>
+                        </div>
+                    `).join('');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+        
+        function addEmailTracking(featureId) {
+            const emailInput = document.getElementById('tracking-email');
+            const email = emailInput.value.trim();
+            if (!email) {
+                showNotification('❌ אנא הזן כתובת אימייל', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('action', 'add_tracking');
+            formData.append('feature_id', featureId);
+            formData.append('email', email);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('✅ מעקב אימייל נוסף בהצלחה!', 'success');
+                    emailInput.value = '';
+                    loadEmailTracking(featureId);
+                } else {
+                    showNotification('❌ ' + (data.message || 'שגיאה בהוספת מעקב'), 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showNotification('❌ שגיאה בהוספת מעקב', 'error');
+            });
+        }
+        
+        function removeEmailTracking(featureId, email) {
+            const formData = new FormData();
+            formData.append('action', 'remove_tracking');
+            formData.append('feature_id', featureId);
+            formData.append('email', email);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('✅ מעקב אימייל הוסר', 'success');
+                    loadEmailTracking(featureId);
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+        
         function showTags(featureId) {
             const modal = document.createElement('div');
             modal.className = 'modal';
