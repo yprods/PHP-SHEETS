@@ -1,7 +1,7 @@
 <?php
 /**
  * מערכת ניהול פיצ'רים משולבת
- * SysAid / SharePoint / Jira / ServiceNow Feature Management System
+ * Feature Management System
  * 
  * @author System
  * @version 1.0
@@ -184,6 +184,40 @@ function initDatabase() {
         UNIQUE(feature_id, email)
     )");
     
+    // Notifications table for real-time notifications
+    $db->exec("CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT,
+        link TEXT,
+        is_read INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )");
+    
+    // Online users tracking table
+    $db->exec("CREATE TABLE IF NOT EXISTS online_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(username)
+    )");
+    
+    // Shared board items table
+    $db->exec("CREATE TABLE IF NOT EXISTS shared_board_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        page_id INTEGER NOT NULL,
+        user TEXT NOT NULL,
+        content TEXT NOT NULL,
+        position_x REAL DEFAULT 0,
+        position_y REAL DEFAULT 0,
+        color TEXT DEFAULT '#ffffff',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (page_id) REFERENCES pages(id)
+    )");
+    
     // Create uploads directory if it doesn't exist
     $uploadsDir = __DIR__ . '/uploads';
     if (!is_dir($uploadsDir)) {
@@ -279,7 +313,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $subject = "עדכון פיצ'ר: {$category} - {$featureName}";
                     sendEmailNotification($email, $subject, '', $id, $field, $oldValue, $value, $user);
                 }
+                
+                // Create notification for all users about the change
+                $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
+                $stmt->bindValue(1, $user, SQLITE3_TEXT);
+                $usersResult = $stmt->execute();
+                $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
+                $stmt->bindValue(1, $id, SQLITE3_INTEGER);
+                $featResult = $stmt->execute();
+                $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
+                $featureName = $featRow['feature'] ?? 'Unknown';
+                
+                while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
+                    $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'change', ?, ?, ?)");
+                    $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
+                    $notifStmt->bindValue(2, "עדכון פיצ'ר", SQLITE3_TEXT);
+                    $notifStmt->bindValue(3, "{$user} עדכן את {$featureName}: {$field} - {$oldValue} → {$value}", SQLITE3_TEXT);
+                    $notifStmt->bindValue(4, "?page_id=" . intval($_POST['page_id'] ?? 1), SQLITE3_TEXT);
+                    $notifStmt->execute();
+                }
             }
+            
+            // Update user online status
+            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
             
             echo json_encode(['success' => true, 'message' => 'Saved successfully']);
             exit;
@@ -308,6 +366,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->bindValue(2, $user, SQLITE3_TEXT);
             $stmt->execute();
             
+            // Create notification for all online users
+            $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $usersResult = $stmt->execute();
+            while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
+                $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'create', ?, ?, ?)");
+                $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
+                $notifStmt->bindValue(2, "פיצ'ר חדש", SQLITE3_TEXT);
+                $notifStmt->bindValue(3, "{$user} יצר פיצ'ר חדש: {$feature}", SQLITE3_TEXT);
+                $notifStmt->bindValue(4, "?page_id={$pageId}", SQLITE3_TEXT);
+                $notifStmt->execute();
+            }
+            
+            // Update user online status
+            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            
             echo json_encode(['success' => true, 'id' => $newId]);
             exit;
             
@@ -325,102 +401,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute();
             
             echo json_encode(['success' => true]);
-            exit;
-            
-        case 'load_sysaid':
-            // Auto-load SysAid features
-            $sysaidFeatures = [
-                ['category' => 'SysAid', 'feature' => 'Ticket Management', 'description' => 'ניהול כרטיסי תמיכה מלא - יצירה, עדכון, סגירה, העברת אחריות, מעקב סטטוס', 'color' => '#e74c3c'],
-                ['category' => 'SysAid', 'feature' => 'Asset Management', 'description' => 'ניהול מלאי ציוד IT - מחשבים, מדפסות, שרתים, רישוי תוכנה, מעקב אחרי מיקום', 'color' => '#3498db'],
-                ['category' => 'SysAid', 'feature' => 'CMDB', 'description' => 'Configuration Management Database - מאגר תצורות IT, קשרים בין פריטים, תלויות', 'color' => '#9b59b6'],
-                ['category' => 'SysAid', 'feature' => 'Monitoring', 'description' => 'ניטור שרתים, רשתות, יישומים - התראות, דוחות ביצועים, זיהוי תקלות', 'color' => '#f39c12'],
-                ['category' => 'SysAid', 'feature' => 'Workflow Engine', 'description' => 'מנוע זרימות עבודה - אוטומציה של תהליכים, אישורים, הקצאות אוטומטיות', 'color' => '#1abc9c'],
-                ['category' => 'SysAid', 'feature' => 'NTLM / SSO', 'description' => 'אימות יחיד (Single Sign-On) עם Active Directory, NTLM, LDAP', 'color' => '#27ae60'],
-                ['category' => 'SysAid', 'feature' => 'Knowledge Base', 'description' => 'מאגר ידע - מאמרים, פתרונות, מדריכים, חיפוש מתקדם', 'color' => '#16a085'],
-                ['category' => 'SysAid', 'feature' => 'Service Level Management', 'description' => 'ניהול רמות שירות (SLA) - מעקב זמנים, התראות, דוחות ביצועים', 'color' => '#e67e22'],
-                ['category' => 'SysAid', 'feature' => 'Change Management', 'description' => 'ניהול שינויים - בקשות שינוי, אישורים, תכנון, יישום, סגירה', 'color' => '#c0392b'],
-                ['category' => 'SysAid', 'feature' => 'Problem Management', 'description' => 'ניהול בעיות - זיהוי שורש בעיה, פתרון, מניעת הישנות', 'color' => '#8e44ad'],
-                ['category' => 'SysAid', 'feature' => 'Project Management', 'description' => 'ניהול פרויקטים - משימות, לוחות זמנים, משאבים, דוחות התקדמות', 'color' => '#34495e'],
-                ['category' => 'SysAid', 'feature' => 'Mobile App', 'description' => 'אפליקציה ניידת - גישה מלאה ממכשירים ניידים, התראות Push', 'color' => '#95a5a6'],
-                ['category' => 'SysAid', 'feature' => 'Reporting & Analytics', 'description' => 'דוחות ואנליטיקה - דוחות מותאמים, גרפים, ניתוח מגמות', 'color' => '#2c3e50'],
-                ['category' => 'SysAid', 'feature' => 'Email Integration', 'description' => 'אינטגרציה עם דואר אלקטרוני - יצירת כרטיסים מאימייל, עדכונים', 'color' => '#7f8c8d'],
-                ['category' => 'SysAid', 'feature' => 'Remote Control', 'description' => 'שלט רחוק - חיבור מרחוק למחשבים, תמיכה טכנית בזמן אמת', 'color' => '#d35400'],
-                ['category' => 'SysAid', 'feature' => 'Software Distribution', 'description' => 'הפצת תוכנה - התקנה מרחוק, עדכונים אוטומטיים, ניהול רישיונות', 'color' => '#27ae60'],
-                ['category' => 'SysAid', 'feature' => 'Patch Management', 'description' => 'ניהול תיקונים - עדכוני אבטחה, בדיקות, התקנה אוטומטית', 'color' => '#e74c3c'],
-                ['category' => 'SysAid', 'feature' => 'Contract Management', 'description' => 'ניהול חוזים - מעקב אחרי חוזי תמיכה, רישיונות, תאריכי תפוגה', 'color' => '#3498db'],
-                ['category' => 'SysAid', 'feature' => 'Self-Service Portal', 'description' => 'פורטל שירות עצמי - בקשות משתמשים, מאגר ידע, מעקב כרטיסים', 'color' => '#9b59b6'],
-                ['category' => 'SysAid', 'feature' => 'ITSM Framework', 'description' => 'מסגרת ITSM מלאה - ITIL, תהליכים מובנים, שיטות עבודה מומלצות', 'color' => '#f39c12'],
-            ];
-            
-            $added = 0;
-            foreach ($sysaidFeatures as $feat) {
-                // Check if exists
-                $stmt = $db->prepare("SELECT id FROM features WHERE category = ? AND feature = ?");
-                $stmt->bindValue(1, $feat['category'], SQLITE3_TEXT);
-                $stmt->bindValue(2, $feat['feature'], SQLITE3_TEXT);
-                $result = $stmt->execute();
-                if (!$result->fetchArray()) {
-                    $stmt = $db->prepare("INSERT INTO features (category, feature, description, color, user) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->bindValue(1, $feat['category'], SQLITE3_TEXT);
-                    $stmt->bindValue(2, $feat['feature'], SQLITE3_TEXT);
-                    $stmt->bindValue(3, $feat['description'], SQLITE3_TEXT);
-                    $stmt->bindValue(4, $feat['color'], SQLITE3_TEXT);
-                    $stmt->bindValue(5, $user, SQLITE3_TEXT);
-                    $stmt->execute();
-                    $added++;
-                }
-            }
-            
-            echo json_encode(['success' => true, 'added' => $added]);
-            exit;
-            
-        case 'load_sharepoint':
-            // Auto-load SharePoint features
-            $sharepointFeatures = [
-                ['category' => 'SharePoint', 'feature' => 'Document Management', 'description' => 'ניהול מסמכים - שמירה, גרסאות, בדיקות, אישורים, חיפוש מתקדם', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'Team Sites', 'description' => 'אתרי צוות - שיתוף פעולה, מסמכים, רשימות, לוחות שנה, משימות', 'color' => '#106ebe'],
-                ['category' => 'SharePoint', 'feature' => 'Lists & Libraries', 'description' => 'רשימות וספריות - רשימות מותאמות, מסמכים, תמונות, וידאו', 'color' => '#005a9e'],
-                ['category' => 'SharePoint', 'feature' => 'Workflows', 'description' => 'זרימות עבודה - אוטומציה של תהליכים עסקיים, אישורים, התראות', 'color' => '#004578'],
-                ['category' => 'SharePoint', 'feature' => 'Search', 'description' => 'חיפוש מתקדם - חיפוש בכל התוכן, מסננים, הצעות, חיפוש אנשים', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'PowerApps Integration', 'description' => 'אינטגרציה עם PowerApps - בניית אפליקציות ללא קוד', 'color' => '#742774'],
-                ['category' => 'SharePoint', 'feature' => 'Power Automate', 'description' => 'אוטומציה - יצירת זרימות אוטומטיות בין שירותים', 'color' => '#0066ff'],
-                ['category' => 'SharePoint', 'feature' => 'Microsoft Teams Integration', 'description' => 'אינטגרציה עם Teams - שיתוף קבצים, שיתוף פעולה', 'color' => '#6264a7'],
-                ['category' => 'SharePoint', 'feature' => 'Version Control', 'description' => 'בקרת גרסאות - היסטוריית שינויים, שחזור, השוואת גרסאות', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'Permissions & Security', 'description' => 'הרשאות ואבטחה - ניהול גישה, קבוצות, הרשאות מותאמות', 'color' => '#d13438'],
-                ['category' => 'SharePoint', 'feature' => 'Content Types', 'description' => 'סוגי תוכן - הגדרת תבניות תוכן, מטא-דאטה, זרימות עבודה', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'Metadata Management', 'description' => 'ניהול מטא-דאטה - תגיות, תכונות מותאמות, ניהול מונחים', 'color' => '#106ebe'],
-                ['category' => 'SharePoint', 'feature' => 'Forms & Surveys', 'description' => 'טפסים וסקרים - יצירת טפסים, איסוף נתונים, ניתוח תוצאות', 'color' => '#005a9e'],
-                ['category' => 'SharePoint', 'feature' => 'Business Intelligence', 'description' => 'בינה עסקית - דוחות Power BI, דשבורדים, ויזואליזציה', 'color' => '#f2c811'],
-                ['category' => 'SharePoint', 'feature' => 'Social Features', 'description' => 'תכונות חברתיות - בלוגים, דיונים, חדשות, עדכונים', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'Mobile Access', 'description' => 'גישה ניידת - אפליקציה לנייד, גישה מכל מכשיר', 'color' => '#106ebe'],
-                ['category' => 'SharePoint', 'feature' => 'External Sharing', 'description' => 'שיתוף חיצוני - שיתוף עם לקוחות, ספקים, שותפים', 'color' => '#005a9e'],
-                ['category' => 'SharePoint', 'feature' => 'Records Management', 'description' => 'ניהול רשומות - שמירה ארוכת טווח, מדיניות שמירה, מחיקה', 'color' => '#004578'],
-                ['category' => 'SharePoint', 'feature' => 'Compliance Center', 'description' => 'מרכז תאימות - תאימות רגולטורית, מדיניות, דוחות', 'color' => '#d13438'],
-                ['category' => 'SharePoint', 'feature' => 'OneDrive Integration', 'description' => 'אינטגרציה עם OneDrive - סינכרון קבצים, גישה אישית', 'color' => '#0078d4'],
-                ['category' => 'SharePoint', 'feature' => 'Yammer Integration', 'description' => 'אינטגרציה עם Yammer - רשת חברתית ארגונית', 'color' => '#106ebe'],
-                ['category' => 'SharePoint', 'feature' => 'Custom Web Parts', 'description' => 'רכיבי ווב מותאמים - פיתוח רכיבים מותאמים, אינטגרציות', 'color' => '#005a9e'],
-                ['category' => 'SharePoint', 'feature' => 'REST API', 'description' => 'REST API - גישה לתכנותית לתוכן, אינטגרציות מותאמות', 'color' => '#004578'],
-            ];
-            
-            $added = 0;
-            foreach ($sharepointFeatures as $feat) {
-                $stmt = $db->prepare("SELECT id FROM features WHERE category = ? AND feature = ?");
-                $stmt->bindValue(1, $feat['category'], SQLITE3_TEXT);
-                $stmt->bindValue(2, $feat['feature'], SQLITE3_TEXT);
-                $result = $stmt->execute();
-                if (!$result->fetchArray()) {
-                    $stmt = $db->prepare("INSERT INTO features (category, feature, description, color, user) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->bindValue(1, $feat['category'], SQLITE3_TEXT);
-                    $stmt->bindValue(2, $feat['feature'], SQLITE3_TEXT);
-                    $stmt->bindValue(3, $feat['description'], SQLITE3_TEXT);
-                    $stmt->bindValue(4, $feat['color'], SQLITE3_TEXT);
-                    $stmt->bindValue(5, $user, SQLITE3_TEXT);
-                    $stmt->execute();
-                    $added++;
-                }
-            }
-            
-            echo json_encode(['success' => true, 'added' => $added]);
             exit;
             
         case 'get_data':
@@ -625,6 +605,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->bindValue(2, $user, SQLITE3_TEXT);
             $stmt->bindValue(3, $comment, SQLITE3_TEXT);
             $stmt->execute();
+            
+            // Get feature info for notification
+            $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
+            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
+            $featResult = $stmt->execute();
+            $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
+            $featureName = $featRow['feature'] ?? 'Unknown';
+            
+            // Create notifications for all online users except the commenter
+            $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $usersResult = $stmt->execute();
+            while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
+                $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'comment', ?, ?, ?)");
+                $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
+                $notifStmt->bindValue(2, "תגובה חדשה", SQLITE3_TEXT);
+                $notifStmt->bindValue(3, "{$user} הגיב על {$featureName}", SQLITE3_TEXT);
+                $notifStmt->bindValue(4, "?feature_id={$featureId}", SQLITE3_TEXT);
+                $notifStmt->execute();
+            }
+            
+            // Update user online status
+            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            
             echo json_encode(['success' => true, 'id' => $db->lastInsertRowID()]);
             exit;
             
@@ -877,6 +883,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true]);
             exit;
             
+        // Notifications
+        case 'get_notifications':
+            $stmt = $db->prepare("SELECT * FROM notifications WHERE user = ? ORDER BY created_at DESC LIMIT 50");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $result = $stmt->execute();
+            $notifications = [];
+            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+                $notifications[] = $row;
+            }
+            echo json_encode($notifications);
+            exit;
+            
+        case 'mark_notification_read':
+            $notifId = intval($_POST['notification_id']);
+            $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user = ?");
+            $stmt->bindValue(1, $notifId, SQLITE3_INTEGER);
+            $stmt->bindValue(2, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        case 'mark_all_notifications_read':
+            $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE user = ?");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        // Online users
+        case 'update_online_status':
+            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        case 'get_online_users':
+            // Get users who were active in last 5 minutes
+            $stmt = $db->query("SELECT username, last_seen FROM online_users WHERE datetime(last_seen) > datetime('now', '-5 minutes') ORDER BY last_seen DESC");
+            $users = [];
+            while ($row = $stmt->fetchArray(SQLITE3_ASSOC)) {
+                $users[] = $row;
+            }
+            echo json_encode($users);
+            exit;
+            
+        // Shared board
+        case 'get_shared_board_items':
+            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
+            $stmt = $db->prepare("SELECT * FROM shared_board_items WHERE page_id = ? ORDER BY created_at DESC");
+            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+            $result = $stmt->execute();
+            $items = [];
+            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+                $items[] = $row;
+            }
+            echo json_encode($items);
+            exit;
+            
+        case 'save_shared_board_item':
+            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
+            $itemId = intval($_POST['item_id'] ?? 0);
+            $content = trim($_POST['content'] ?? '');
+            $positionX = floatval($_POST['position_x'] ?? 0);
+            $positionY = floatval($_POST['position_y'] ?? 0);
+            $color = $_POST['color'] ?? '#ffffff';
+            
+            if ($itemId > 0) {
+                $stmt = $db->prepare("UPDATE shared_board_items SET content = ?, position_x = ?, position_y = ?, color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user = ?");
+                $stmt->bindValue(1, $content, SQLITE3_TEXT);
+                $stmt->bindValue(2, $positionX, SQLITE3_FLOAT);
+                $stmt->bindValue(3, $positionY, SQLITE3_FLOAT);
+                $stmt->bindValue(4, $color, SQLITE3_TEXT);
+                $stmt->bindValue(5, $itemId, SQLITE3_INTEGER);
+                $stmt->bindValue(6, $user, SQLITE3_TEXT);
+                $stmt->execute();
+            } else {
+                $stmt = $db->prepare("INSERT INTO shared_board_items (page_id, user, content, position_x, position_y, color) VALUES (?, ?, ?, ?, ?, ?)");
+                $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+                $stmt->bindValue(2, $user, SQLITE3_TEXT);
+                $stmt->bindValue(3, $content, SQLITE3_TEXT);
+                $stmt->bindValue(4, $positionX, SQLITE3_FLOAT);
+                $stmt->bindValue(5, $positionY, SQLITE3_FLOAT);
+                $stmt->bindValue(6, $color, SQLITE3_TEXT);
+                $stmt->execute();
+                $itemId = $db->lastInsertRowID();
+            }
+            
+            // Update user online status
+            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
+            $stmt->bindValue(1, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            
+            echo json_encode(['success' => true, 'id' => $itemId]);
+            exit;
+            
+        case 'delete_shared_board_item':
+            $itemId = intval($_POST['item_id']);
+            $stmt = $db->prepare("DELETE FROM shared_board_items WHERE id = ? AND user = ?");
+            $stmt->bindValue(1, $itemId, SQLITE3_INTEGER);
+            $stmt->bindValue(2, $user, SQLITE3_TEXT);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
         // Download Report
         case 'download_report':
             $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
@@ -932,8 +1043,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#2563eb">
-    <meta name="description" content="מערכת ניהול פיצ'רים משולבת - SysAid / SharePoint / Jira / ServiceNow">
-    <title>מערכת ניהול פיצ'רים - SysAid / SharePoint / Jira / ServiceNow</title>
+    <meta name="description" content="מערכת ניהול פיצ'רים">
+    <title>מערכת ניהול פיצ'רים</title>
     
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
@@ -1447,11 +1558,25 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             cursor: pointer;
             font-size: 16px;
             transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-primary);
+            margin-left: 8px;
         }
         
         .btn-icon:hover {
-            background: var(--bg-secondary);
+            background: var(--primary-color);
             border-color: var(--primary-color);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .btn-icon .icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
         }
         
         .page-tabs-container {
@@ -1815,6 +1940,234 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         .auto-link:hover {
             color: var(--primary-hover);
         }
+        
+        /* Notifications */
+        .notifications-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: var(--shadow-md);
+            width: 400px;
+            max-height: 500px;
+            z-index: 1000;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+        
+        .notifications-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-secondary);
+        }
+        
+        .notifications-header h4 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .notifications-list {
+            max-height: 450px;
+            overflow-y: auto;
+        }
+        
+        .notification-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .notification-item:hover {
+            background: var(--bg-secondary);
+        }
+        
+        .notification-item.unread {
+            background: #eff6ff;
+            font-weight: 500;
+        }
+        
+        .notification-item .notification-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .notification-item .notification-message {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .notification-item .notification-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        
+        /* Online users */
+        .online-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .online-users-list {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: var(--shadow-md);
+            min-width: 200px;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 100;
+        }
+        
+        .online-user-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0;
+            font-size: 13px;
+        }
+        
+        /* Shared board */
+        .shared-board-container {
+            position: relative;
+            width: 100%;
+            height: 600px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .board-item {
+            position: absolute;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            min-width: 180px;
+            min-height: 120px;
+            max-width: 400px;
+            cursor: move;
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        
+        .board-item:hover {
+            box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10;
+            transform: translateY(-2px);
+        }
+        
+        .board-item:active {
+            cursor: grabbing;
+        }
+        
+        .board-item.dragging {
+            opacity: 0.8;
+            z-index: 100;
+        }
+        
+        .board-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: grab;
+        }
+        
+        .board-item-header:active {
+            cursor: grabbing;
+        }
+        
+        .board-item-user {
+            font-size: 11px;
+            color: var(--primary-color);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .board-item-user::before {
+            content: '👤';
+            font-size: 12px;
+        }
+        
+        .board-item-content {
+            font-size: 14px;
+            color: var(--text-primary);
+            min-height: 60px;
+            line-height: 1.6;
+            padding: 8px;
+            border: 1px dashed transparent;
+            border-radius: 4px;
+            outline: none;
+            word-wrap: break-word;
+            resize: vertical;
+            overflow-y: auto;
+        }
+        
+        .board-item-content:focus {
+            border-color: var(--primary-color);
+            background: var(--bg-secondary);
+        }
+        
+        .board-item-actions {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        
+        .board-item-actions button {
+            padding: 4px 8px;
+            font-size: 11px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background: var(--bg-secondary);
+            transition: all 0.2s;
+        }
+        
+        .board-item-actions button:hover {
+            background: var(--danger-color);
+            color: white;
+        }
+        
+        .board-item-actions input[type="color"] {
+            width: 28px;
+            height: 28px;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            padding: 0;
+        }
     </style>
     
     <!-- SVG Icons Sprite -->
@@ -1883,6 +2236,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             <symbol id="icon-search" viewBox="0 0 24 24">
                 <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
             </symbol>
+            <symbol id="icon-bell" viewBox="0 0 24 24">
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+            </symbol>
         </defs>
     </svg>
 </head>
@@ -1901,11 +2257,36 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 <svg class="icon"><use href="#icon-users"></use></svg>
             </button>
         </div>
-        <p class="subtitle">SysAid / SharePoint / Jira / ServiceNow</p>
+        <p class="subtitle">מערכת ניהול פיצ'רים</p>
         
-        <div class="user-info">
-            <svg class="icon" style="margin-left: 4px;"><use href="#icon-users"></use></svg>
-            משתמש: <strong><?php echo htmlspecialchars($user); ?></strong>
+        <div class="user-info" style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <svg class="icon" style="margin-left: 4px;"><use href="#icon-users"></use></svg>
+                משתמש: <strong><?php echo htmlspecialchars($user); ?></strong>
+                <div id="online-users-indicator" onclick="toggleOnlineUsersList()" style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background='transparent'">
+                    <span class="online-dot"></span>
+                    <span id="online-users-count">0</span> מחוברים
+                </div>
+                <div id="online-users-list" class="online-users-list" style="display: none;">
+                    <div style="font-weight: 600; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);">משתמשים מחוברים</div>
+                    <div id="online-users-list-content"></div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div id="notifications-container" style="position: relative;">
+                    <button class="btn-icon" onclick="toggleNotifications(); event.stopPropagation();" id="notifications-btn" title="התראות">
+                        <svg class="icon"><use href="#icon-bell"></use></svg>
+                        <span id="notifications-badge" style="display: none; position: absolute; top: -4px; left: -4px; background: #ef4444; color: white; border-radius: 50%; width: 18px; height: 18px; font-size: 11px; line-height: 18px; text-align: center; font-weight: bold;">0</span>
+                    </button>
+                    <div id="notifications-dropdown" class="notifications-dropdown" style="display: none;">
+                        <div class="notifications-header">
+                            <h4>התראות</h4>
+                            <button onclick="markAllNotificationsRead()" style="font-size: 12px; padding: 4px 8px;">סמן הכל כקרוא</button>
+                        </div>
+                        <div id="notifications-list" class="notifications-list" onclick="event.stopPropagation();"></div>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <!-- Page Tabs (Bottom) -->
@@ -1918,14 +2299,6 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         </div>
         
         <div class="controls">
-            <button class="btn-primary" onclick="loadSysAid()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-refresh"></use></svg>
-                טען פיצ'רי SysAid
-            </button>
-            <button class="btn-primary" onclick="loadSharePoint()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-refresh"></use></svg>
-                טען פיצ'רי SharePoint
-            </button>
             <button class="btn-success" onclick="addNewRow()">
                 <svg class="icon" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
                 הוסף שורה חדשה
@@ -1957,6 +2330,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-audit"></use></svg>
                 לוג Audit
             </button>
+            <button class="tab" onclick="showTab('board')">
+                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-page"></use></svg>
+                לוח משותף
+            </button>
         </div>
         
         <!-- Table Tab -->
@@ -1984,10 +2361,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     <tr data-id="<?php echo $feat['id']; ?>" style="background-color: <?php echo $feat['color']; ?>20;">
                         <td>
                             <select class="editable" data-field="category" onchange="saveField(this)">
-                                <option value="SysAid" <?php echo $feat['category'] === 'SysAid' ? 'selected' : ''; ?>>SysAid</option>
-                                <option value="SharePoint" <?php echo $feat['category'] === 'SharePoint' ? 'selected' : ''; ?>>SharePoint</option>
-                                <option value="Jira" <?php echo $feat['category'] === 'Jira' ? 'selected' : ''; ?>>Jira</option>
-                                <option value="ServiceNow" <?php echo $feat['category'] === 'ServiceNow' ? 'selected' : ''; ?>>ServiceNow</option>
+                                <option value="קטגוריה 1" <?php echo $feat['category'] === 'קטגוריה 1' ? 'selected' : ''; ?>>קטגוריה 1</option>
+                                <option value="קטגוריה 2" <?php echo $feat['category'] === 'קטגוריה 2' ? 'selected' : ''; ?>>קטגוריה 2</option>
+                                <option value="קטגוריה 3" <?php echo $feat['category'] === 'קטגוריה 3' ? 'selected' : ''; ?>>קטגוריה 3</option>
+                                <option value="קטגוריה 4" <?php echo $feat['category'] === 'קטגוריה 4' ? 'selected' : ''; ?>>קטגוריה 4</option>
                             </select>
                         </td>
                         <td><input type="text" class="editable" data-field="feature" value="<?php echo htmlspecialchars($feat['feature']); ?>" onblur="saveField(this)" /></td>
@@ -2086,9 +2463,30 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         <!-- Audit Tab -->
         <div id="audit-tab" class="tab-content">
             <h3>לוג פעולות (Audit Log)</h3>
+            <div class="search-container">
+                <input type="text" id="audit-search-input" class="search-input" placeholder="חפש בלוג..." onkeyup="filterAudit()">
+                <span class="search-icon">
+                    <svg class="icon"><use href="#icon-search"></use></svg>
+                </span>
+            </div>
             <div class="audit-log" id="audit-log">
                 <p>טוען...</p>
             </div>
+        </div>
+        
+        <!-- Shared Board Tab -->
+        <div id="board-tab" class="tab-content">
+            <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; padding: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white; box-shadow: var(--shadow-md);">
+                <div>
+                    <h3 style="margin: 0; color: white; font-size: 1.25rem;">לוח משותף - עבודה משותפת</h3>
+                    <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.9;">כולם יכולים להוסיף ולערוך פתקים כאן בזמן אמת</p>
+                </div>
+                <button class="btn-success" onclick="addBoardItem()" style="background: white; color: #667eea; border: none; font-weight: 600;">
+                    <svg class="icon" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
+                    הוסף פתק
+                </button>
+            </div>
+            <div class="shared-board-container" id="shared-board"></div>
         </div>
     </div>
     
@@ -2273,6 +2671,421 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     });
             });
         }
+        
+        // Real-time polling for notifications and online users
+        let pollingInterval = null;
+        let lastNotificationCheck = 0;
+        
+        function startPolling() {
+            // Update online status immediately
+            updateOnlineStatus();
+            loadOnlineUsers();
+            loadNotifications();
+            
+            // Poll every 3 seconds for real-time updates
+            pollingInterval = setInterval(() => {
+                updateOnlineStatus();
+                loadOnlineUsers();
+                loadNotifications();
+                
+                // Refresh shared board if it's visible (but don't override user's current editing)
+                const boardTab = document.getElementById('board-tab');
+                if (boardTab && boardTab.classList.contains('active')) {
+                    // Only refresh if no item is being dragged
+                    if (!draggedItem) {
+                        const formData = new FormData();
+                        formData.append('action', 'get_shared_board_items');
+                        formData.append('page_id', currentPageId);
+                        
+                        fetch('', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(items => {
+                            // Update existing items or add new ones
+                            const container = document.getElementById('shared-board');
+                            items.forEach(item => {
+                                const existing = document.getElementById('board-item-' + item.id);
+                                if (!existing && !boardItems[item.id]) {
+                                    addBoardItemToDOM(item);
+                                    boardItems[item.id] = item;
+                                } else if (existing && !draggedItem) {
+                                    // Update content if different and not being edited
+                                    const contentEl = existing.querySelector('.board-item-content');
+                                    if (contentEl && !contentEl.matches(':focus') && contentEl.textContent !== item.content) {
+                                        contentEl.textContent = item.content;
+                                        boardItems[item.id].content = item.content;
+                                    }
+                                    // Update position if different (only if not being dragged)
+                                    if (Math.abs(parseFloat(existing.style.left) - item.position_x) > 5 || 
+                                        Math.abs(parseFloat(existing.style.top) - item.position_y) > 5) {
+                                        existing.style.left = item.position_x + 'px';
+                                        existing.style.top = item.position_y + 'px';
+                                        boardItems[item.id].position_x = item.position_x;
+                                        boardItems[item.id].position_y = item.position_y;
+                                    }
+                                    // Update color if different
+                                    if (existing.style.backgroundColor !== item.color) {
+                                        existing.style.backgroundColor = item.color;
+                                        existing.querySelector('input[type="color"]').value = item.color;
+                                        boardItems[item.id].color = item.color;
+                                    }
+                                }
+                            });
+                            
+                            // Remove items that no longer exist
+                            Object.keys(boardItems).forEach(itemId => {
+                                if (!items.find(i => i.id == itemId)) {
+                                    const el = document.getElementById('board-item-' + itemId);
+                                    if (el) el.remove();
+                                    delete boardItems[itemId];
+                                }
+                            });
+                        })
+                        .catch(error => console.error('Error refreshing board:', error));
+                    }
+                }
+            }, 3000);
+        }
+        
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+        
+        // Notifications functions
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notifications-dropdown');
+            const isVisible = dropdown.style.display !== 'none';
+            dropdown.style.display = isVisible ? 'none' : 'block';
+            if (!isVisible) {
+                loadNotifications();
+            }
+        }
+        
+        
+        function loadNotifications() {
+            const formData = new FormData();
+            formData.append('action', 'get_notifications');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(notifications => {
+                const list = document.getElementById('notifications-list');
+                const badge = document.getElementById('notifications-badge');
+                const unreadCount = notifications.filter(n => !n.is_read).length;
+                
+                if (unreadCount > 0) {
+                    badge.style.display = 'block';
+                    badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+                } else {
+                    badge.style.display = 'none';
+                }
+                
+                if (notifications.length === 0) {
+                    list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">אין התראות</div>';
+                } else {
+                    list.innerHTML = notifications.map(notif => `
+                        <div class="notification-item ${notif.is_read ? '' : 'unread'}" onclick="handleNotificationClick(${notif.id}, '${notif.link || ''}')">
+                            <div class="notification-title">${escapeHtml(notif.title)}</div>
+                            <div class="notification-message">${escapeHtml(notif.message || '')}</div>
+                            <div class="notification-time">${formatDate(notif.created_at)}</div>
+                        </div>
+                    `).join('');
+                }
+            })
+            .catch(error => console.error('Error loading notifications:', error));
+        }
+        
+        function handleNotificationClick(notifId, link) {
+            markNotificationRead(notifId);
+            if (link) {
+                window.location.href = link;
+            }
+        }
+        
+        function markNotificationRead(notifId) {
+            const formData = new FormData();
+            formData.append('action', 'mark_notification_read');
+            formData.append('notification_id', notifId);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(() => loadNotifications());
+        }
+        
+        function markAllNotificationsRead() {
+            const formData = new FormData();
+            formData.append('action', 'mark_all_notifications_read');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(() => loadNotifications());
+        }
+        
+        // Online users functions
+        function updateOnlineStatus() {
+            const formData = new FormData();
+            formData.append('action', 'update_online_status');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .catch(error => console.error('Error updating online status:', error));
+        }
+        
+        function loadOnlineUsers() {
+            const formData = new FormData();
+            formData.append('action', 'get_online_users');
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(users => {
+                const count = users.length;
+                const countEl = document.getElementById('online-users-count');
+                if (countEl) countEl.textContent = count;
+                
+                const listContent = document.getElementById('online-users-list-content');
+                if (listContent) {
+                    if (users.length === 0) {
+                        listContent.innerHTML = '<div style="padding: 8px; color: var(--text-secondary); font-size: 12px; text-align: center;">אין משתמשים מחוברים</div>';
+                    } else {
+                        listContent.innerHTML = users.map(user => `
+                            <div class="online-user-item">
+                                <span class="online-dot"></span>
+                                <span>${escapeHtml(user.username)}</span>
+                                <span style="margin-right: auto; font-size: 11px; color: var(--text-secondary);">${formatDate(user.last_seen)}</span>
+                            </div>
+                        `).join('');
+                    }
+                }
+            })
+            .catch(error => console.error('Error loading online users:', error));
+        }
+        
+        function toggleOnlineUsersList() {
+            const list = document.getElementById('online-users-list');
+            if (list) {
+                list.style.display = list.style.display === 'none' ? 'block' : 'none';
+                if (list.style.display === 'block') {
+                    loadOnlineUsers();
+                }
+            }
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', (e) => {
+            // Close notifications
+            const container = document.getElementById('notifications-container');
+            const dropdown = document.getElementById('notifications-dropdown');
+            if (container && dropdown && !container.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+            
+            // Close online users list
+            const indicator = document.getElementById('online-users-indicator');
+            const list = document.getElementById('online-users-list');
+            if (list && indicator && !indicator.contains(e.target) && !list.contains(e.target)) {
+                list.style.display = 'none';
+            }
+        });
+        
+        // Shared board functions
+        let boardItems = {};
+        let draggedItem = null;
+        
+        function loadSharedBoard() {
+            const container = document.getElementById('shared-board');
+            if (!container) return;
+            
+            const formData = new FormData();
+            formData.append('action', 'get_shared_board_items');
+            formData.append('page_id', currentPageId);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(items => {
+                boardItems = {};
+                container.innerHTML = '';
+                
+                items.forEach(item => {
+                    addBoardItemToDOM(item);
+                    boardItems[item.id] = item;
+                });
+            })
+            .catch(error => console.error('Error loading board:', error));
+        }
+        
+        function addBoardItem() {
+            const item = {
+                id: 0,
+                user: '<?php echo htmlspecialchars($user); ?>',
+                content: 'פתק חדש',
+                position_x: Math.random() * 300,
+                position_y: Math.random() * 200,
+                color: '#ffffff'
+            };
+            
+            addBoardItemToDOM(item);
+            saveBoardItem(item);
+        }
+        
+        function addBoardItemToDOM(item) {
+            const container = document.getElementById('shared-board');
+            const div = document.createElement('div');
+            div.className = 'board-item';
+            div.id = 'board-item-' + item.id;
+            div.style.left = item.position_x + 'px';
+            div.style.top = item.position_y + 'px';
+            div.style.backgroundColor = item.color;
+            div.draggable = true;
+            
+            div.innerHTML = `
+                <div class="board-item-header">
+                    <span class="board-item-user">${escapeHtml(item.user)}</span>
+                    <div class="board-item-actions">
+                        <input type="color" value="${item.color}" onchange="changeBoardItemColor(${item.id}, this.value)" title="שנה צבע">
+                        <button onclick="deleteBoardItem(${item.id})" title="מחק פתק">🗑️</button>
+                    </div>
+                </div>
+                <div class="board-item-content" contenteditable="true" onblur="saveBoardItemContent(${item.id}, this.textContent)" placeholder="כתוב כאן...">${escapeHtml(item.content)}</div>
+            `;
+            
+            // Make draggable
+            let isDragging = false;
+            let dragOffset = { x: 0, y: 0 };
+            
+            div.addEventListener('mousedown', (e) => {
+                if (e.target.closest('.board-item-header') || e.target.closest('.board-item-header *')) {
+                    isDragging = true;
+                    draggedItem = item.id;
+                    div.classList.add('dragging');
+                    const rect = div.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    dragOffset.x = e.clientX - rect.left;
+                    dragOffset.y = e.clientY - rect.top;
+                    e.preventDefault();
+                }
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging && draggedItem === item.id) {
+                    const containerRect = container.getBoundingClientRect();
+                    let x = e.clientX - containerRect.left - dragOffset.x;
+                    let y = e.clientY - containerRect.top - dragOffset.y;
+                    
+                    // Keep within bounds
+                    x = Math.max(0, Math.min(x, containerRect.width - div.offsetWidth));
+                    y = Math.max(0, Math.min(y, containerRect.height - div.offsetHeight));
+                    
+                    div.style.left = x + 'px';
+                    div.style.top = y + 'px';
+                }
+            });
+            
+            document.addEventListener('mouseup', (e) => {
+                if (isDragging && draggedItem === item.id) {
+                    isDragging = false;
+                    div.classList.remove('dragging');
+                    const containerRect = container.getBoundingClientRect();
+                    const x = parseFloat(div.style.left);
+                    const y = parseFloat(div.style.top);
+                    updateBoardItemPosition(draggedItem, x, y);
+                    draggedItem = null;
+                }
+            });
+            
+            container.appendChild(div);
+        }
+        
+        function saveBoardItem(item) {
+            const formData = new FormData();
+            formData.append('action', 'save_shared_board_item');
+            formData.append('page_id', currentPageId);
+            formData.append('item_id', item.id);
+            formData.append('content', item.content);
+            formData.append('position_x', item.position_x);
+            formData.append('position_y', item.position_y);
+            formData.append('color', item.color);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.id) {
+                    item.id = data.id;
+                    boardItems[data.id] = item;
+                    document.getElementById('board-item-' + (item.id || 0)).id = 'board-item-' + data.id;
+                }
+            })
+            .catch(error => console.error('Error saving board item:', error));
+        }
+        
+        function updateBoardItemPosition(itemId, x, y) {
+            const item = boardItems[itemId];
+            if (item) {
+                item.position_x = x;
+                item.position_y = y;
+                saveBoardItem(item);
+            }
+        }
+        
+        function saveBoardItemContent(itemId, content) {
+            const item = boardItems[itemId];
+            if (item) {
+                item.content = content;
+                saveBoardItem(item);
+            }
+        }
+        
+        function changeBoardItemColor(itemId, color) {
+            const item = boardItems[itemId];
+            if (item) {
+                item.color = color;
+                document.getElementById('board-item-' + itemId).style.backgroundColor = color;
+                saveBoardItem(item);
+            }
+        }
+        
+        function deleteBoardItem(itemId) {
+            if (!confirm('האם אתה בטוח שברצונך למחוק פתק זה?')) return;
+            
+            const formData = new FormData();
+            formData.append('action', 'delete_shared_board_item');
+            formData.append('item_id', itemId);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('board-item-' + itemId).remove();
+                    delete boardItems[itemId];
+                }
+            })
+            .catch(error => console.error('Error deleting board item:', error));
+        }
         // Global variables
         let categoryChart = null;
         let updateChart = null;
@@ -2291,6 +3104,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 loadMap();
             } else if (tabName === 'audit') {
                 loadAudit();
+            } else if (tabName === 'board') {
+                loadSharedBoard();
             }
         }
         
@@ -2506,10 +3321,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             row.innerHTML = `
                 <td>
                     <select class="editable" data-field="category" onchange="saveNewRow(this)">
-                        <option value="SysAid">SysAid</option>
-                        <option value="SharePoint">SharePoint</option>
-                        <option value="Jira">Jira</option>
-                        <option value="ServiceNow">ServiceNow</option>
+                        <option value="קטגוריה 1">קטגוריה 1</option>
+                        <option value="קטגוריה 2">קטגוריה 2</option>
+                        <option value="קטגוריה 3">קטגוריה 3</option>
+                        <option value="קטגוריה 4">קטגוריה 4</option>
                     </select>
                 </td>
                 <td><input type="text" class="editable" data-field="feature" onblur="saveNewRow(this)" placeholder="שם פיצ'ר" /></td>
@@ -2905,6 +3720,30 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             }
         }
         
+        function filterAudit() {
+            const input = document.getElementById('audit-search-input');
+            if (!input) return;
+            const filter = input.value.toLowerCase();
+            const items = document.querySelectorAll('#audit-log .audit-item');
+            
+            items.forEach(item => {
+                const text = item.getAttribute('data-audit-text') || '';
+                item.style.display = text.indexOf(filter) > -1 ? '' : 'none';
+            });
+        }
+        
+        function filterPermissions() {
+            const input = document.getElementById('permissions-search-input');
+            if (!input) return;
+            const filter = input.value.toLowerCase();
+            const items = document.querySelectorAll('#permissions-list > div');
+            
+            items.forEach(item => {
+                const text = (item.textContent || item.innerText || '').toLowerCase();
+                item.style.display = text.indexOf(filter) > -1 ? '' : 'none';
+            });
+        }
+        
         // Load audit
         function loadAudit() {
             const formData = new FormData();
@@ -2924,7 +3763,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 }
                 
                 logDiv.innerHTML = data.map(item => `
-                    <div class="audit-item">
+                    <div class="audit-item" data-audit-text="${(item.action + ' ' + (item.category || '') + ' ' + (item.feature || '') + ' ' + (item.field_name || '') + ' ' + item.user + ' ' + item.created_at + ' ' + (item.old_value || '') + ' ' + (item.new_value || '')).toLowerCase()}">
                         <strong>${item.action}</strong> | 
                         ${item.category ? item.category + ' - ' + item.feature : 'N/A'} | 
                         ${item.field_name || ''} | 
@@ -3154,7 +3993,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                     <option value="number">מספר</option>
                                     <option value="date">תאריך</option>
                                 </select>
-                                <button class="btn-success" onclick="addColumn(event)">➕ הוסף עמודה</button>
+                                <button class="btn-success" onclick="addColumn(event); event.preventDefault(); event.stopPropagation(); return false;">➕ הוסף עמודה</button>
                             </div>
                         </div>
                     </div>
@@ -3321,6 +4160,12 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         </div>
                         <div>
                             <h4>הרשאות משתמשים</h4>
+                            <div class="search-container" style="margin-bottom: 16px;">
+                                <input type="text" id="permissions-search-input" class="search-input" placeholder="חפש משתמש..." onkeyup="filterPermissions()">
+                                <span class="search-icon">
+                                    <svg class="icon"><use href="#icon-search"></use></svg>
+                                </span>
+                            </div>
                             <div id="permissions-list">
                                 ${permissions.map(perm => `
                                     <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
@@ -3334,7 +4179,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                 <input type="text" id="new-user-name" placeholder="שם משתמש" style="padding: 8px; width: 200px; margin-left: 8px;">
                                 <label><input type="checkbox" id="new-user-view" checked> צפייה</label>
                                 <label><input type="checkbox" id="new-user-edit"> עריכה</label>
-                                <button class="btn-success" onclick="addPermission()">➕ הוסף הרשאה</button>
+                                <button class="btn-success" onclick="addPermission(); event.preventDefault(); event.stopPropagation(); return false;">➕ הוסף הרשאה</button>
                             </div>
                         </div>
                     </div>
@@ -3525,10 +4370,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 const edges = [];
                 const categories = {};
                 const categoryColors = {
-                    'SysAid': '#2563eb',
-                    'SharePoint': '#10b981',
-                    'Jira': '#f59e0b',
-                    'ServiceNow': '#8b5cf6'
+                    'קטגוריה 1': '#2563eb',
+                    'קטגוריה 2': '#10b981',
+                    'קטגוריה 3': '#f59e0b',
+                    'קטגוריה 4': '#8b5cf6'
                 };
                 
                 data.forEach((item, index) => {
@@ -3594,7 +4439,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     nodes: {
                         font: { size: 12, face: 'Arial' },
                         borderWidth: 2,
-                        shadow: true
+                        shadow: true,
+                        margin: 20,
+                        spacing: 50,
+                        size: 30
                     },
                     edges: {
                         smooth: { type: 'continuous', roundness: 0.5 },
@@ -3607,9 +4455,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                             enabled: !mapEditMode,
                             direction: 'UD',
                             sortMethod: 'directed',
-                            levelSeparation: 150,
-                            nodeSpacing: 200,
-                            treeSpacing: 200,
+                            levelSeparation: 300,
+                            nodeSpacing: 350,
+                            treeSpacing: 400,
                             blockShifting: true,
                             edgeMinimization: true,
                             parentCentralization: true
@@ -4410,16 +5258,23 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 });
             }
             
-            // Auto-load SysAid features only on first page
-            if (currentPageId == 1) {
-                setTimeout(() => {
-                    loadSysAid();
-                }, 500);
-                
-                setTimeout(() => {
-                    loadSharePoint();
-                }, 1500);
-            }
+            // Start real-time polling
+            startPolling();
+            
+            // Stop polling when page is hidden
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    stopPolling();
+                } else {
+                    startPolling();
+                }
+            });
+            
+            // Clean up on page unload
+            window.addEventListener('beforeunload', () => {
+                stopPolling();
+            });
+            
         });
     </script>
 </body>
