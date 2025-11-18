@@ -1048,13 +1048,38 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     
     <!-- PWA Manifest -->
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.svg">
+    <link rel="icon" type="image/svg+xml" href="icon-192.svg">
     
     <!-- Chart.js -->
-    <script src="chart.umd.min.js"></script>
+    <script src="chart.umd.min.js" onerror="loadChartJSFromCDN()"></script>
+    <script>
+        function loadChartJSFromCDN() {
+            if (typeof Chart === 'undefined') {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+                script.onerror = function() {
+                    console.error('Failed to load Chart.js from CDN');
+                };
+                document.head.appendChild(script);
+            }
+        }
+    </script>
     
     <!-- vis-network -->
-    <script type="text/javascript" src="vis-network.min.js"></script>
+    <script type="text/javascript" src="vis-network.min.js" onerror="loadVisNetworkFromCDN()"></script>
+    <script>
+        function loadVisNetworkFromCDN() {
+            if (typeof vis === 'undefined') {
+                const script = document.createElement('script');
+                script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
+                script.onerror = function() {
+                    console.error('Failed to load vis-network from CDN');
+                };
+                document.head.appendChild(script);
+            }
+        }
+    </script>
     
     <style>
         /* Using system fonts instead of external font */
@@ -2653,22 +2678,42 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         // Service Worker Registration for PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('sw.js', { scope: './' })
-                    .then(function(registration) {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                        // Check for updates
-                        registration.addEventListener('updatefound', function() {
-                            const newWorker = registration.installing;
-                            newWorker.addEventListener('statechange', function() {
-                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                // Unregister old service workers first
+                navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    for(let registration of registrations) {
+                        registration.unregister();
+                    }
+                }).then(function() {
+                    // Register new service worker
+                    return navigator.serviceWorker.register('sw.js', { scope: './' });
+                }).then(function(registration) {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    
+                    // Force update
+                    registration.update();
+                    
+                    // Check for updates
+                    registration.addEventListener('updatefound', function() {
+                        const newWorker = registration.installing;
+                        newWorker.addEventListener('statechange', function() {
+                            if (newWorker.state === 'installed') {
+                                if (navigator.serviceWorker.controller) {
                                     console.log('New service worker available. Reload to update.');
+                                } else {
+                                    console.log('Service worker installed for the first time');
                                 }
-                            });
+                            }
+                            if (newWorker.state === 'activated') {
+                                console.log('Service worker activated');
+                                // Reload to ensure everything uses the new service worker
+                                window.location.reload();
+                            }
                         });
-                    })
-                    .catch(function(err) {
-                        console.error('ServiceWorker registration failed: ', err);
                     });
+                })
+                .catch(function(err) {
+                    console.error('ServiceWorker registration failed: ', err);
+                });
             });
         }
         
@@ -4340,10 +4385,27 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 return;
             }
             
-            // Check if vis-network is loaded
+            // Check if vis-network is loaded, wait and retry if not
             if (typeof vis === 'undefined' || !vis.Network) {
-                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: ספריית vis-network לא נטענה. אנא ודא שקובץ vis-network.min.js קיים בתיקייה.</p>';
-                console.error('vis-network library not loaded');
+                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">⏳ טוען מפה...</p>';
+                
+                // Try to load from CDN if local file failed
+                if (typeof vis === 'undefined') {
+                    const script = document.createElement('script');
+                    script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
+                    script.onload = function() {
+                        console.log('vis-network loaded from CDN');
+                        setTimeout(loadMap, 100);
+                    };
+                    script.onerror = function() {
+                        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: לא ניתן לטעון את ספריית vis-network. אנא בדוק את חיבור האינטרנט.</p>';
+                        console.error('Failed to load vis-network from CDN');
+                    };
+                    document.head.appendChild(script);
+                } else {
+                    // Retry after a short delay
+                    setTimeout(loadMap, 500);
+                }
                 return;
             }
             
@@ -4475,31 +4537,52 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     }
                 };
                 
-                if (network) network.destroy();
-                network = new vis.Network(container, networkData, options);
-                
-                // Node selection
-                network.on('click', function(params) {
-                    if (params.nodes.length > 0) {
-                        selectedNodeId = params.nodes[0];
-                        if (mapEditMode) {
-                            showNotification('צומת נבחר: ' + network.body.data.nodes.get(selectedNodeId).label, 'success');
-                        }
-                    }
-                });
-                
-                // Fit to screen on load
-                setTimeout(() => {
+                try {
                     if (network) {
-                        network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                        network.destroy();
+                        network = null;
                     }
-                }, 100);
+                    network = new vis.Network(container, networkData, options);
+                    
+                    // Node selection
+                    network.on('click', function(params) {
+                        if (params.nodes.length > 0) {
+                            selectedNodeId = params.nodes[0];
+                            if (mapEditMode && network && network.body && network.body.data) {
+                                const nodeData = network.body.data.nodes.get(selectedNodeId);
+                                if (nodeData) {
+                                    showNotification('צומת נבחר: ' + nodeData.label, 'success');
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Handle errors
+                    network.on('error', function(error) {
+                        console.error('Network error:', error);
+                    });
+                    
+                    // Fit to screen on load
+                    setTimeout(() => {
+                        if (network) {
+                            try {
+                                network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                            } catch (e) {
+                                console.error('Error fitting network:', e);
+                                network.fit();
+                            }
+                        }
+                    }, 200);
+                } catch (error) {
+                    console.error('Error creating network:', error);
+                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה ביצירת המפה: ' + error.message + '</p><p style="text-align: center; margin-top: 10px;"><button class="btn-primary" onclick="loadMap()">נסה שוב</button></p>';
+                }
             })
             .catch(error => {
                 console.error('Error loading map:', error);
                 const container = document.getElementById('feature-map');
                 if (container) {
-                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה בטעינת המפה: ' + error.message + '</p>';
+                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה בטעינת המפה: ' + error.message + '</p><p style="text-align: center; margin-top: 10px;"><button class="btn-primary" onclick="loadMap()">נסה שוב</button></p>';
                 }
             });
         }
