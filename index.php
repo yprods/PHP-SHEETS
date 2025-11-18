@@ -2052,9 +2052,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         .online-users-list {
-            position: fixed;
-            top: 80px;
-            left: 20px;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 8px;
             background: white;
             border: 1px solid var(--border-color);
             border-radius: 8px;
@@ -2063,7 +2064,11 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             min-width: 200px;
             max-height: 300px;
             overflow-y: auto;
-            z-index: 100;
+            z-index: 1000;
+        }
+        
+        #online-users-indicator {
+            position: relative;
         }
         
         .online-user-item {
@@ -2272,32 +2277,15 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         <!-- Editable Title -->
         <div class="title-container">
             <h1 id="page-title" contenteditable="true" onblur="updatePageTitle()" style="cursor: text; border-bottom: 2px dashed transparent; padding-bottom: 4px;"><?php echo htmlspecialchars($currentPage['title']); ?></h1>
-            <button class="btn-icon" onclick="togglePageLock()" id="lock-btn" title="נעל/פתח דף">
-                <svg class="icon"><use href="#icon-<?php echo $currentPage['is_locked'] ? 'lock' : 'unlock'; ?>"></use></svg>
-            </button>
-            <button class="btn-icon" onclick="showColumnManager()" title="נהל עמודות">
-                <svg class="icon"><use href="#icon-settings"></use></svg>
-            </button>
-            <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
-                <svg class="icon"><use href="#icon-users"></use></svg>
-            </button>
-        </div>
-        <p class="subtitle">מערכת ניהול פיצ'רים</p>
-        
-        <div class="user-info" style="display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 16px;">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-users"></use></svg>
-                משתמש: <strong><?php echo htmlspecialchars($user); ?></strong>
-                <div id="online-users-indicator" onclick="toggleOnlineUsersList()" style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer; padding: 4px 8px; border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background='transparent'">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div id="online-users-indicator" onclick="toggleOnlineUsersList()" style="display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; cursor: pointer; padding: 6px 10px; border-radius: 6px; transition: all 0.2s; border: 1px solid var(--border-color); position: relative;" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background='transparent'">
                     <span class="online-dot"></span>
                     <span id="online-users-count">0</span> מחוברים
+                    <div id="online-users-list" class="online-users-list" style="display: none;">
+                        <div style="font-weight: 600; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);">משתמשים מחוברים</div>
+                        <div id="online-users-list-content"></div>
+                    </div>
                 </div>
-                <div id="online-users-list" class="online-users-list" style="display: none;">
-                    <div style="font-weight: 600; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);">משתמשים מחוברים</div>
-                    <div id="online-users-list-content"></div>
-                </div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 12px;">
                 <div id="notifications-container" style="position: relative;">
                     <button class="btn-icon" onclick="toggleNotifications(); event.stopPropagation();" id="notifications-btn" title="התראות">
                         <svg class="icon"><use href="#icon-bell"></use></svg>
@@ -2311,7 +2299,22 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         <div id="notifications-list" class="notifications-list" onclick="event.stopPropagation();"></div>
                     </div>
                 </div>
+                <button class="btn-icon" onclick="togglePageLock()" id="lock-btn" title="נעל/פתח דף">
+                    <svg class="icon"><use href="#icon-<?php echo $currentPage['is_locked'] ? 'lock' : 'unlock'; ?>"></use></svg>
+                </button>
+                <button class="btn-icon" onclick="showColumnManager()" title="נהל עמודות">
+                    <svg class="icon"><use href="#icon-settings"></use></svg>
+                </button>
+                <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
+                    <svg class="icon"><use href="#icon-users"></use></svg>
+                </button>
             </div>
+        </div>
+        <p class="subtitle">מערכת ניהול פיצ'רים</p>
+        
+        <div class="user-info" style="display: flex; align-items: center; justify-content: center;">
+            <svg class="icon" style="margin-left: 4px;"><use href="#icon-users"></use></svg>
+            משתמש: <strong><?php echo htmlspecialchars($user); ?></strong>
         </div>
         
         <!-- Page Tabs (Bottom) -->
@@ -4368,6 +4371,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             nodes.add({
                 id: newId,
                 label: label,
+                level: 1,
                 color: { background: '#2563eb', border: '#1d4ed8' },
                 shape: 'dot',
                 size: 20
@@ -4484,6 +4488,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         id: item.id,
                         label: item.feature.substring(0, 30) + (item.feature.length > 30 ? '...' : ''),
                         group: item.category,
+                        level: 1,
                         color: {
                             background: item.color,
                             border: categoryColors[item.category] || '#6b7280',
@@ -4514,12 +4519,12 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     });
                 });
                 
-                // Connect features to categories
+                // Connect categories to features (for hierarchical layout)
                 data.forEach(item => {
                     const catId = categories[item.category].id;
                     edges.push({
-                        from: item.id,
-                        to: 'cat_' + catId,
+                        from: 'cat_' + catId,
+                        to: item.id,
                         arrows: { to: { enabled: true, scaleFactor: 0.8 } },
                         color: { color: '#9ca3af', highlight: '#000' },
                         width: 2,
