@@ -4312,12 +4312,44 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             if (network) {
                 network.setOptions({
+                    layout: {
+                        hierarchical: {
+                            enabled: !mapEditMode,
+                            direction: 'UD',
+                            sortMethod: 'directed',
+                            levelSeparation: 300,
+                            nodeSpacing: 350,
+                            treeSpacing: 400,
+                            blockShifting: true,
+                            edgeMinimization: true,
+                            parentCentralization: true
+                        }
+                    },
+                    physics: {
+                        enabled: true,
+                        hierarchicalRepulsion: {
+                            centralGravity: 0.0,
+                            springLength: 100,
+                            springConstant: 0.01,
+                            nodeDistance: 350,
+                            damping: 0.09
+                        },
+                        solver: mapEditMode ? 'forceAtlas2Based' : 'hierarchicalRepulsion',
+                        stabilization: {
+                            enabled: true,
+                            iterations: 100,
+                            updateInterval: 25
+                        }
+                    },
                     interaction: {
                         dragNodes: mapEditMode,
                         dragView: true,
                         zoomView: true
                     }
                 });
+                
+                // Re-stabilize the network when switching modes
+                network.stabilize();
             }
         }
         
@@ -4526,7 +4558,20 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         }
                     },
                     physics: {
-                        enabled: mapEditMode
+                        enabled: true,
+                        hierarchicalRepulsion: {
+                            centralGravity: 0.0,
+                            springLength: 100,
+                            springConstant: 0.01,
+                            nodeDistance: 350,
+                            damping: 0.09
+                        },
+                        solver: mapEditMode ? 'forceAtlas2Based' : 'hierarchicalRepulsion',
+                        stabilization: {
+                            enabled: true,
+                            iterations: 100,
+                            updateInterval: 25
+                        }
                     },
                     interaction: {
                         dragNodes: mapEditMode,
@@ -4562,7 +4607,21 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         console.error('Network error:', error);
                     });
                     
-                    // Fit to screen on load
+                    // Wait for stabilization then fit to screen
+                    network.once('stabilizationEnd', function() {
+                        setTimeout(() => {
+                            if (network) {
+                                try {
+                                    network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                                } catch (e) {
+                                    console.error('Error fitting network:', e);
+                                    network.fit();
+                                }
+                            }
+                        }, 100);
+                    });
+                    
+                    // Fallback: fit after a delay even if stabilization event doesn't fire
                     setTimeout(() => {
                         if (network) {
                             try {
@@ -4572,7 +4631,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                 network.fit();
                             }
                         }
-                    }, 200);
+                    }, 1500);
                 } catch (error) {
                     console.error('Error creating network:', error);
                     container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה ביצירת המפה: ' + error.message + '</p><p style="text-align: center; margin-top: 10px;"><button class="btn-primary" onclick="loadMap()">נסה שוב</button></p>';
