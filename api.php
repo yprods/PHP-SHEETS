@@ -457,13 +457,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
             
         case 'create_page':
-            $title = $_POST['title'] ?? 'דף חדש';
-            $stmt = $db->prepare("INSERT INTO pages (title, created_by, page_order) VALUES (?, ?, (SELECT COALESCE(MAX(page_order), 0) + 1 FROM pages))");
-            $stmt->bindValue(1, $title, SQLITE3_TEXT);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            $pageId = $db->lastInsertRowID();
-            echo json_encode(['success' => true, 'id' => $pageId]);
+            $title = trim($_POST['title'] ?? 'דף חדש');
+            if (empty($title)) {
+                echo json_encode(['success' => false, 'message' => 'שם דף לא יכול להיות ריק']);
+                exit;
+            }
+            
+            try {
+                // Get max page_order
+                $maxOrderResult = $db->querySingle("SELECT COALESCE(MAX(page_order), 0) + 1 FROM pages");
+                $maxOrder = $maxOrderResult ? intval($maxOrderResult) : 1;
+                
+                $stmt = $db->prepare("INSERT INTO pages (title, created_by, page_order) VALUES (?, ?, ?)");
+                $stmt->bindValue(1, $title, SQLITE3_TEXT);
+                $stmt->bindValue(2, $user, SQLITE3_TEXT);
+                $stmt->bindValue(3, $maxOrder, SQLITE3_INTEGER);
+                
+                if (!$stmt->execute()) {
+                    throw new Exception('Failed to execute INSERT query');
+                }
+                
+                $pageId = $db->lastInsertRowID();
+                if (!$pageId) {
+                    throw new Exception('Failed to get last insert ID');
+                }
+                
+                echo json_encode(['success' => true, 'id' => $pageId, 'title' => $title]);
+            } catch (Exception $e) {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'message' => 'שגיאה ביצירת הדף: ' . $e->getMessage()]);
+            }
             exit;
             
         case 'update_page_title':
@@ -1075,7 +1098,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             echo json_encode($report);
             exit;
+            
+        default:
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . ($_POST['action'] ?? 'none')]);
+            exit;
     }
+} else {
+    // Not a POST request with action - this file was included for functions only
+    // Do nothing, just provide the functions
 }
 ?>
 

@@ -77,15 +77,37 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     <script type="text/javascript" src="vis-network.min.js" onerror="loadVisNetworkFromCDN()"></script>
     <script>
         function loadVisNetworkFromCDN() {
-            if (typeof vis === 'undefined') {
+            if (typeof vis === 'undefined' || !vis.Network) {
+                console.log('Loading vis-network from CDN...');
                 const script = document.createElement('script');
                 script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
+                script.onload = function() {
+                    console.log('vis-network loaded successfully from CDN');
+                    // Try to load map if it was requested
+                    if (typeof loadMap === 'function') {
+                        setTimeout(loadMap, 100);
+                    }
+                };
                 script.onerror = function() {
                     console.error('Failed to load vis-network from CDN');
+                    const container = document.getElementById('feature-map');
+                    if (container) {
+                        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: לא ניתן לטעון את ספריית vis-network מכל המקורות. אנא בדוק את חיבור האינטרנט או העלה את הקובץ vis-network.min.js לתיקייה.</p>';
+                    }
                 };
                 document.head.appendChild(script);
             }
         }
+        
+        // Check if vis-network is loaded after page load
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                if (typeof vis === 'undefined' || !vis.Network) {
+                    console.warn('vis-network not loaded, attempting CDN load...');
+                    loadVisNetworkFromCDN();
+                }
+            }, 500);
+        });
     </script>
     
     <style>
@@ -2946,15 +2968,34 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.success) {
                     showNotification('✅ הדף נוצר בהצלחה!', 'success');
                     loadPages();
-                    switchPage(data.id);
+                    // Wait a bit for pages to load, then switch
+                    setTimeout(() => {
+                        if (data.id) {
+                            switchPage(data.id);
+                        } else {
+                            // Reload to show new page
+                            window.location.reload();
+                        }
+                    }, 300);
+                } else {
+                    showNotification('❌ שגיאה ביצירת הדף: ' + (data.message || 'שגיאה לא ידועה'), 'error');
+                    console.error('Create page error:', data);
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error creating page:', error);
+                showNotification('❌ שגיאה ביצירת הדף: ' + error.message, 'error');
+            });
         }
         
         function deletePage(pageId) {
@@ -3557,6 +3598,16 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">אין נתונים להצגה במפה</p>';
                     return;
                 }
+                
+                // Double-check vis-network is loaded
+                if (typeof vis === 'undefined' || !vis.Network) {
+                    console.error('vis-network still not loaded after fetch');
+                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: ספריית vis-network לא נטענה. מנסה לטעון מחדש...</p>';
+                    loadVisNetworkFromCDN();
+                    setTimeout(loadMap, 2000);
+                    return;
+                }
+                
                 const nodes = [];
                 const edges = [];
                 const categories = {};
@@ -3568,6 +3619,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 };
                 
                 data.forEach((item, index) => {
+                    if (!item.category) return; // Skip items without category
+                    
                     if (!categories[item.category]) {
                         categories[item.category] = {
                             id: Object.keys(categories).length,
@@ -3579,15 +3632,15 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     
                     nodes.push({
                         id: item.id,
-                        label: item.feature.substring(0, 30) + (item.feature.length > 30 ? '...' : ''),
+                        label: (item.feature || 'ללא שם').substring(0, 30) + ((item.feature || '').length > 30 ? '...' : ''),
                         group: item.category,
                         level: 1,
                         color: {
-                            background: item.color,
+                            background: item.color || '#3498db',
                             border: categoryColors[item.category] || '#6b7280',
-                            highlight: { background: item.color, border: '#000' }
+                            highlight: { background: item.color || '#3498db', border: '#000' }
                         },
-                        title: item.description || item.feature,
+                        title: item.description || item.feature || '',
                         font: { size: 12, face: 'Arial' },
                         shape: 'dot',
                         size: 20
@@ -3614,6 +3667,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 
                 // Connect categories to features (for hierarchical layout)
                 data.forEach(item => {
+                    if (!item.category || !categories[item.category]) return;
                     const catId = categories[item.category].id;
                     edges.push({
                         from: 'cat_' + catId,
@@ -3713,7 +3767,29 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                     network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
                                 } catch (e) {
                                     console.error('Error fitting network:', e);
-                                    network.fit();
+                                    try {
+                                        network.fit();
+                                    } catch (e2) {
+                                        console.error('Error fitting network (fallback):', e2);
+                                    }
+                                }
+                            }
+                        }, 100);
+                    });
+                    
+                    // Also listen for stabilizationIterationsDone as fallback
+                    network.once('stabilizationIterationsDone', function() {
+                        setTimeout(() => {
+                            if (network && !network.isStabilizing()) {
+                                try {
+                                    network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                                } catch (e) {
+                                    console.error('Error fitting network (iterations done):', e);
+                                    try {
+                                        network.fit();
+                                    } catch (e2) {
+                                        console.error('Error fitting network (iterations done fallback):', e2);
+                                    }
                                 }
                             }
                         }, 100);
@@ -3723,10 +3799,27 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     setTimeout(() => {
                         if (network) {
                             try {
-                                network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                                if (!network.isStabilizing()) {
+                                    network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                                } else {
+                                    // Wait a bit more if still stabilizing
+                                    setTimeout(() => {
+                                        if (network) {
+                                            try {
+                                                network.fit();
+                                            } catch (e) {
+                                                console.error('Error fitting network (timeout):', e);
+                                            }
+                                        }
+                                    }, 500);
+                                }
                             } catch (e) {
                                 console.error('Error fitting network:', e);
-                                network.fit();
+                                try {
+                                    network.fit();
+                                } catch (e2) {
+                                    console.error('Error fitting network (fallback):', e2);
+                                }
                             }
                         }
                     }, 1500);
