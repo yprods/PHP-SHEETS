@@ -271,11 +271,15 @@ function sendEmailNotification($to, $subject, $message, $featureId, $field, $old
 // Handle API requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
-    $db = initDatabase();
-    $user = getCurrentUser();
-    $currentPageId = isset($_POST['page_id']) ? intval($_POST['page_id']) : (isset($_GET['page_id']) ? intval($_GET['page_id']) : 1);
     
-    switch ($_POST['action']) {
+    try {
+        $db = initDatabase();
+        $user = getCurrentUser();
+        $currentPageId = isset($_POST['page_id']) ? intval($_POST['page_id']) : (isset($_GET['page_id']) ? intval($_GET['page_id']) : 1);
+        
+        $action = $_POST['action'];
+        
+        switch ($action) {
         case 'save':
             $id = intval($_POST['id']);
             $field = $_POST['field'];
@@ -420,7 +424,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
         case 'get_data':
             $pageId = intval($_POST['page_id'] ?? 1);
-            $result = $db->query("SELECT * FROM features WHERE page_id = $pageId OR page_id IS NULL ORDER BY category, feature");
+            // Use prepared statement to prevent SQL injection
+            $stmt = $db->prepare("SELECT * FROM features WHERE (page_id = ? OR (page_id IS NULL AND ? = 1)) ORDER BY category, feature");
+            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+            $stmt->bindValue(2, $pageId, SQLITE3_INTEGER);
+            $result = $stmt->execute();
             $data = [];
             while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
                 $data[] = $row;
@@ -1101,8 +1109,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
         default:
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . ($_POST['action'] ?? 'none')]);
+            echo json_encode(['success' => false, 'message' => 'Unknown action: ' . ($action ?? 'none')]);
             exit;
+        }
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
+        error_log('API Error: ' . $e->getMessage());
+        exit;
     }
 } else {
     // Not a POST request with action - this file was included for functions only

@@ -2207,7 +2207,11 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             if (tabName === 'dashboard') {
                 loadDashboard();
             } else if (tabName === 'map') {
-                loadMap();
+                console.log('Map tab clicked, loading map...');
+                // Small delay to ensure tab is visible
+                setTimeout(() => {
+                    loadMap();
+                }, 100);
             } else if (tabName === 'audit') {
                 loadAudit();
             } else if (tabName === 'board') {
@@ -2958,37 +2962,47 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         
         function createNewPage() {
             const title = prompt('הזן שם לדף החדש:', 'דף חדש');
-            if (!title) return;
+            if (!title || !title.trim()) return;
+            
+            console.log('Creating new page with title:', title);
             
             const formData = new FormData();
             formData.append('action', 'create_page');
-            formData.append('title', title);
+            formData.append('title', title.trim());
             
             fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
             .then(response => {
+                console.log('Response status:', response.status, response.statusText);
                 if (!response.ok) {
-                    throw new Error('Network response was not ok: ' + response.status);
+                    return response.text().then(text => {
+                        console.error('Response text:', text);
+                        throw new Error('Network response was not ok: ' + response.status + ' - ' + text);
+                    });
                 }
                 return response.json();
             })
             .then(data => {
-                if (data.success) {
+                console.log('Response data:', data);
+                if (data && data.success) {
                     showNotification('✅ הדף נוצר בהצלחה!', 'success');
+                    // Reload pages list
                     loadPages();
                     // Wait a bit for pages to load, then switch
                     setTimeout(() => {
                         if (data.id) {
+                            console.log('Switching to page:', data.id);
                             switchPage(data.id);
                         } else {
-                            // Reload to show new page
+                            console.log('No page ID, reloading...');
                             window.location.reload();
                         }
-                    }, 300);
+                    }, 500);
                 } else {
-                    showNotification('❌ שגיאה ביצירת הדף: ' + (data.message || 'שגיאה לא ידועה'), 'error');
+                    const errorMsg = (data && data.message) ? data.message : 'שגיאה לא ידועה';
+                    showNotification('❌ שגיאה ביצירת הדף: ' + errorMsg, 'error');
                     console.error('Create page error:', data);
                 }
             })
@@ -3549,6 +3563,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         
         // Load map with edit mode and node selection support
         function loadMap() {
+            console.log('loadMap() called, currentPageId:', currentPageId);
             const container = document.getElementById('feature-map');
             if (!container) {
                 console.error('Map container not found');
@@ -3557,15 +3572,24 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             // Check if vis-network is loaded, wait and retry if not
             if (typeof vis === 'undefined' || !vis.Network) {
+                console.log('vis-network not loaded, vis:', typeof vis, 'vis.Network:', typeof vis !== 'undefined' ? typeof vis.Network : 'N/A');
                 container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">⏳ טוען מפה...</p>';
                 
                 // Try to load from CDN if local file failed
                 if (typeof vis === 'undefined') {
+                    console.log('Loading vis-network from CDN...');
                     const script = document.createElement('script');
                     script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
                     script.onload = function() {
-                        console.log('vis-network loaded from CDN');
-                        setTimeout(loadMap, 100);
+                        console.log('vis-network loaded from CDN successfully');
+                        setTimeout(() => {
+                            if (typeof vis !== 'undefined' && vis.Network) {
+                                loadMap();
+                            } else {
+                                console.error('vis-network still not available after CDN load');
+                                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: vis-network לא נטען. נסה לרענן את הדף.</p>';
+                            }
+                        }, 200);
                     };
                     script.onerror = function() {
                         container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: לא ניתן לטעון את ספריית vis-network. אנא בדוק את חיבור האינטרנט.</p>';
@@ -3574,11 +3598,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     document.head.appendChild(script);
                 } else {
                     // Retry after a short delay
+                    console.log('vis exists but Network not available, retrying...');
                     setTimeout(loadMap, 500);
                 }
                 return;
             }
             
+            console.log('vis-network is loaded, fetching data...');
             const formData = new FormData();
             formData.append('action', 'get_data');
             formData.append('page_id', currentPageId);
@@ -3588,12 +3614,17 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 body: formData
             })
             .then(response => {
+                console.log('Map data response status:', response.status);
                 if (!response.ok) {
-                    throw new Error('Network response was not ok');
+                    return response.text().then(text => {
+                        console.error('Map data response error:', text);
+                        throw new Error('Network response was not ok: ' + response.status);
+                    });
                 }
                 return response.json();
             })
             .then(data => {
+                console.log('Map data received:', data ? data.length + ' items' : 'null/empty');
                 if (!data || data.length === 0) {
                     container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">אין נתונים להצגה במפה</p>';
                     return;
@@ -3601,7 +3632,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 
                 // Double-check vis-network is loaded
                 if (typeof vis === 'undefined' || !vis.Network) {
-                    console.error('vis-network still not loaded after fetch');
+                    console.error('vis-network still not loaded after fetch, vis:', typeof vis, 'Network:', typeof vis !== 'undefined' ? typeof vis.Network : 'N/A');
                     container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: ספריית vis-network לא נטענה. מנסה לטעון מחדש...</p>';
                     loadVisNetworkFromCDN();
                     setTimeout(loadMap, 2000);
@@ -3679,6 +3710,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     });
                 });
                 
+                console.log('Creating network with', nodes.length, 'nodes and', edges.length, 'edges');
+                
+                if (nodes.length === 0) {
+                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">אין צמתים להצגה במפה</p>';
+                    return;
+                }
+                
                 const container = document.getElementById('feature-map');
                 const networkData = { nodes: nodes, edges: edges };
                 const options = {
@@ -3735,11 +3773,23 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 };
                 
                 try {
+                    console.log('Destroying old network if exists...');
                     if (network) {
-                        network.destroy();
+                        try {
+                            network.destroy();
+                        } catch (e) {
+                            console.warn('Error destroying old network:', e);
+                        }
                         network = null;
                     }
+                    
+                    console.log('Creating new vis.Network...');
+                    if (!vis || !vis.Network) {
+                        throw new Error('vis.Network is not available');
+                    }
+                    
                     network = new vis.Network(container, networkData, options);
+                    console.log('Network created successfully');
                     
                     // Node selection
                     network.on('click', function(params) {
@@ -4606,6 +4656,14 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             // Apply auto-linking to all text content
             applyAutoLinks();
+            
+            // Pre-load vis-network if map tab might be opened
+            setTimeout(() => {
+                if (typeof vis === 'undefined' || !vis.Network) {
+                    console.log('Pre-loading vis-network...');
+                    loadVisNetworkFromCDN();
+                }
+            }, 1000);
             
             // Load likes for all features
             document.querySelectorAll('[id^="like-btn-"]').forEach(btn => {
