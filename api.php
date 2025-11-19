@@ -56,10 +56,24 @@ function initDatabase() {
         title TEXT NOT NULL DEFAULT 'דף חדש',
         page_order INTEGER DEFAULT 0,
         is_locked INTEGER DEFAULT 0,
+        lock_pin TEXT DEFAULT NULL,
         created_by TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )");
+    
+    // Add lock_pin column if it doesn't exist
+    $columns = $db->query("PRAGMA table_info(pages)");
+    $hasLockPin = false;
+    while ($col = $columns->fetchArray(SQLITE3_ASSOC)) {
+        if ($col['name'] === 'lock_pin') {
+            $hasLockPin = true;
+            break;
+        }
+    }
+    if (!$hasLockPin) {
+        $db->exec("ALTER TABLE pages ADD COLUMN lock_pin TEXT DEFAULT NULL");
+    }
     
     // Page permissions table
     $db->exec("CREATE TABLE IF NOT EXISTS page_permissions (
@@ -464,8 +478,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
         case 'toggle_page_lock':
             $pageId = intval($_POST['page_id']);
+            $pin = $_POST['pin'] ?? '';
+            $newLockState = intval($_POST['lock_state'] ?? 0);
+            
+            // Get current page state
+            $stmt = $db->prepare("SELECT is_locked, lock_pin FROM pages WHERE id = ?");
+            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+            $result = $stmt->execute();
+            $page = $result->fetchArray(SQLITE3_ASSOC);
+            
+            if (!$page) {
+                echo json_encode(['success' => false, 'message' => 'דף לא נמצא']);
+                exit;
+            }
+            
+            $currentLockState = intval($page['is_locked']);
+            $currentPin = $page['lock_pin'];
+            
+            // If locking: set pin if provided, or keep existing pin
+            if ($newLockState == 1) {
+                $pinToSet = !empty($pin) ? $pin : ($currentPin ?? '');
+                $stmt = $db->prepare("UPDATE pages SET is_locked = 1, lock_pin = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                $stmt->bindValue(1, $pinToSet, SQLITE3_TEXT);
+                $stmt->bindValue(2, $pageId, SQLITE3_INTEGER);
+                $stmt->execute();
+                echo json_encode(['success' => true, 'locked' => true]);
+                exit;
+            }
+            
+            // If unlocking: verify pin if page has a pin
+            if ($newLockState == 0) {
+                if (!empty($currentPin)) {
+                    if ($pin !== $currentPin) {
+                        echo json_encode(['success' => false, 'message' => 'קוד PIN שגוי']);
+                        exit;
+                    }
+                }
+                $stmt = $db->prepare("UPDATE pages SET is_locked = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+                $stmt->execute();
+                echo json_encode(['success' => true, 'locked' => false]);
+                exit;
+            }
+            
+            // Fallback: toggle lock state (legacy support)
             $stmt = $db->prepare("UPDATE pages SET is_locked = NOT is_locked, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
             $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
+            $stmt->execute();
+            echo json_encode(['success' => true]);
+            exit;
+            
+        case 'set_page_lock_pin':
+            $pageId = intval($_POST['page_id']);
+            $pin = $_POST['pin'] ?? '';
+            $stmt = $db->prepare("UPDATE pages SET lock_pin = ? WHERE id = ?");
+            $stmt->bindValue(1, $pin, SQLITE3_TEXT);
+            $stmt->bindValue(2, $pageId, SQLITE3_INTEGER);
             $stmt->execute();
             echo json_encode(['success' => true]);
             exit;

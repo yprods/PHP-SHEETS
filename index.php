@@ -7,6 +7,15 @@
  * @version 1.0
  */
 
+// Include API for POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    require_once __DIR__ . '/api.php';
+    exit;
+}
+
+// Include API functions for page load (only functions, not the POST handler)
+require_once __DIR__ . '/api.php';
+
 // Database configuration
 define('DB_PATH', __DIR__ . '/data.db');
 
@@ -254,766 +263,11 @@ function sendEmailNotification($to, $subject, $message, $featureId, $field, $old
     return mail($to, $subject, $body, $headers);
 }
 
-// Handle API requests
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    header('Content-Type: application/json');
-    $db = initDatabase();
-    $user = getCurrentUser();
-    
-    switch ($_POST['action']) {
-        case 'save':
-            $id = intval($_POST['id']);
-            $field = $_POST['field'];
-            $value = $_POST['value'];
-            
-            // Get old value
-            $stmt = $db->prepare("SELECT $field FROM features WHERE id = ?");
-            $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-            $result = $stmt->execute();
-            $row = $result->fetchArray(SQLITE3_ASSOC);
-            $oldValue = $row[$field] ?? '';
-            
-            // Update feature
-            $stmt = $db->prepare("UPDATE features SET $field = ?, user = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-            $stmt->bindValue(1, $value, SQLITE3_TEXT);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->bindValue(3, $id, SQLITE3_INTEGER);
-            $stmt->execute();
-            
-            // Save to versions
-            $stmt = $db->prepare("INSERT INTO versions (feature_id, field_name, old_value, new_value, user) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $field, SQLITE3_TEXT);
-            $stmt->bindValue(3, $oldValue, SQLITE3_TEXT);
-            $stmt->bindValue(4, $value, SQLITE3_TEXT);
-            $stmt->bindValue(5, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            // Save to audit
-            $stmt = $db->prepare("INSERT INTO audit (feature_id, action, field_name, old_value, new_value, user) VALUES (?, 'UPDATE', ?, ?, ?, ?)");
-            $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $field, SQLITE3_TEXT);
-            $stmt->bindValue(3, $oldValue, SQLITE3_TEXT);
-            $stmt->bindValue(4, $value, SQLITE3_TEXT);
-            $stmt->bindValue(5, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            // Send email notifications to tracked users
-            if ($oldValue !== $value) {
-                $trackResult = $db->query("SELECT email FROM feature_tracking WHERE feature_id = $id");
-                while ($trackRow = $trackResult->fetchArray(SQLITE3_ASSOC)) {
-                    $email = $trackRow['email'];
-                    $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
-                    $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-                    $featResult = $stmt->execute();
-                    $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
-                    $featureName = $featRow['feature'] ?? 'Unknown';
-                    $category = $featRow['category'] ?? '';
-                    
-                    $subject = "עדכון פיצ'ר: {$category} - {$featureName}";
-                    sendEmailNotification($email, $subject, '', $id, $field, $oldValue, $value, $user);
-                }
-                
-                // Create notification for all users about the change
-                $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
-                $stmt->bindValue(1, $user, SQLITE3_TEXT);
-                $usersResult = $stmt->execute();
-                $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
-                $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-                $featResult = $stmt->execute();
-                $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
-                $featureName = $featRow['feature'] ?? 'Unknown';
-                
-                while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
-                    $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'change', ?, ?, ?)");
-                    $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
-                    $notifStmt->bindValue(2, "עדכון פיצ'ר", SQLITE3_TEXT);
-                    $notifStmt->bindValue(3, "{$user} עדכן את {$featureName}: {$field} - {$oldValue} → {$value}", SQLITE3_TEXT);
-                    $notifStmt->bindValue(4, "?page_id=" . intval($_POST['page_id'] ?? 1), SQLITE3_TEXT);
-                    $notifStmt->execute();
-                }
-            }
-            
-            // Update user online status
-            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            echo json_encode(['success' => true, 'message' => 'Saved successfully']);
-            exit;
-            
-        case 'add':
-            $category = $_POST['category'] ?? '';
-            $feature = $_POST['feature'] ?? '';
-            $description = $_POST['description'] ?? '';
-            $color = $_POST['color'] ?? '#3498db';
-            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
-            
-            $stmt = $db->prepare("INSERT INTO features (category, feature, description, color, user, page_id) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->bindValue(1, $category, SQLITE3_TEXT);
-            $stmt->bindValue(2, $feature, SQLITE3_TEXT);
-            $stmt->bindValue(3, $description, SQLITE3_TEXT);
-            $stmt->bindValue(4, $color, SQLITE3_TEXT);
-            $stmt->bindValue(5, $user, SQLITE3_TEXT);
-            $stmt->bindValue(6, $pageId, SQLITE3_INTEGER);
-            $stmt->execute();
-            
-            $newId = $db->lastInsertRowID();
-            
-            // Audit
-            $stmt = $db->prepare("INSERT INTO audit (feature_id, action, user) VALUES (?, 'CREATE', ?)");
-            $stmt->bindValue(1, $newId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            // Create notification for all online users
-            $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $usersResult = $stmt->execute();
-            while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
-                $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'create', ?, ?, ?)");
-                $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
-                $notifStmt->bindValue(2, "פיצ'ר חדש", SQLITE3_TEXT);
-                $notifStmt->bindValue(3, "{$user} יצר פיצ'ר חדש: {$feature}", SQLITE3_TEXT);
-                $notifStmt->bindValue(4, "?page_id={$pageId}", SQLITE3_TEXT);
-                $notifStmt->execute();
-            }
-            
-            // Update user online status
-            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            echo json_encode(['success' => true, 'id' => $newId]);
-            exit;
-            
-        case 'delete':
-            $id = intval($_POST['id']);
-            
-            // Audit
-            $stmt = $db->prepare("INSERT INTO audit (feature_id, action, user) VALUES (?, 'DELETE', ?)");
-            $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            $stmt = $db->prepare("DELETE FROM features WHERE id = ?");
-            $stmt->bindValue(1, $id, SQLITE3_INTEGER);
-            $stmt->execute();
-            
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_data':
-            $pageId = intval($_POST['page_id'] ?? 1);
-            $result = $db->query("SELECT * FROM features WHERE page_id = $pageId OR page_id IS NULL ORDER BY category, feature");
-            $data = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $data[] = $row;
-            }
-            echo json_encode($data);
-            exit;
-            
-        case 'get_stats':
-            $result = $db->query("SELECT category, COUNT(*) as count FROM features GROUP BY category");
-            $stats = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $stats[] = $row;
-            }
-            echo json_encode($stats);
-            exit;
-            
-        case 'get_audit':
-            $limit = intval($_POST['limit'] ?? 50);
-            $result = $db->query("SELECT a.*, f.feature, f.category FROM audit a LEFT JOIN features f ON a.feature_id = f.id ORDER BY a.created_at DESC LIMIT $limit");
-            $audit = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $audit[] = $row;
-            }
-            echo json_encode($audit);
-            exit;
-            
-        case 'get_pages':
-            $result = $db->query("SELECT * FROM pages ORDER BY page_order, id");
-            $pages = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $pages[] = $row;
-            }
-            echo json_encode($pages);
-            exit;
-            
-        case 'create_page':
-            $title = $_POST['title'] ?? 'דף חדש';
-            $stmt = $db->prepare("INSERT INTO pages (title, created_by, page_order) VALUES (?, ?, (SELECT COALESCE(MAX(page_order), 0) + 1 FROM pages))");
-            $stmt->bindValue(1, $title, SQLITE3_TEXT);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            $pageId = $db->lastInsertRowID();
-            echo json_encode(['success' => true, 'id' => $pageId]);
-            exit;
-            
-        case 'update_page_title':
-            $pageId = intval($_POST['page_id']);
-            $title = $_POST['title'] ?? '';
-            $stmt = $db->prepare("UPDATE pages SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-            $stmt->bindValue(1, $title, SQLITE3_TEXT);
-            $stmt->bindValue(2, $pageId, SQLITE3_INTEGER);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'toggle_page_lock':
-            $pageId = intval($_POST['page_id']);
-            $stmt = $db->prepare("UPDATE pages SET is_locked = NOT is_locked, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'delete_page':
-            $pageId = intval($_POST['page_id']);
-            $db->exec("DELETE FROM pages WHERE id = $pageId");
-            $db->exec("UPDATE features SET page_id = 1 WHERE page_id = $pageId");
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_custom_columns':
-            $pageId = intval($_POST['page_id'] ?? 1);
-            $result = $db->query("SELECT * FROM custom_columns WHERE page_id = $pageId ORDER BY column_order");
-            $columns = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $columns[] = $row;
-            }
-            echo json_encode($columns);
-            exit;
-            
-        case 'add_custom_column':
-            $pageId = intval($_POST['page_id'] ?? 1);
-            $columnName = trim($_POST['column_name'] ?? '');
-            $columnType = $_POST['column_type'] ?? 'text';
-            
-            if (empty($columnName)) {
-                echo json_encode(['success' => false, 'message' => 'שם עמודה לא יכול להיות ריק']);
-                exit;
-            }
-            
-            try {
-                $maxOrder = $db->querySingle("SELECT MAX(column_order) FROM custom_columns WHERE page_id = $pageId") ?: 0;
-                $stmt = $db->prepare("INSERT INTO custom_columns (page_id, column_name, column_type, column_order) VALUES (?, ?, ?, ?)");
-                $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
-                $stmt->bindValue(2, $columnName, SQLITE3_TEXT);
-                $stmt->bindValue(3, $columnType, SQLITE3_TEXT);
-                $stmt->bindValue(4, $maxOrder + 1, SQLITE3_INTEGER);
-                
-                if (!$stmt->execute()) {
-                    throw new Exception('Failed to insert column');
-                }
-                
-                $newColumnId = $db->lastInsertRowID();
-                
-                // Add column to features table dynamically
-                $columnKey = 'custom_' . $newColumnId;
-                try {
-                    $db->exec("ALTER TABLE features ADD COLUMN `$columnKey` TEXT");
-                } catch (Exception $e) {
-                    // Column might already exist - that's okay
-                    error_log("Column $columnKey might already exist: " . $e->getMessage());
-                }
-                
-                echo json_encode(['success' => true, 'id' => $newColumnId, 'key' => $columnKey]);
-            } catch (Exception $e) {
-                echo json_encode(['success' => false, 'message' => 'שגיאה בהוספת העמודה: ' . $e->getMessage()]);
-            }
-            exit;
-            
-        case 'delete_custom_column':
-            $columnId = intval($_POST['column_id']);
-            $result = $db->query("SELECT * FROM custom_columns WHERE id = $columnId");
-            $column = $result->fetchArray(SQLITE3_ASSOC);
-            if ($column) {
-                $columnKey = 'custom_' . $columnId;
-                try {
-                    // SQLite doesn't support DROP COLUMN easily, so we'll just mark as hidden
-                    $db->exec("UPDATE custom_columns SET is_visible = 0 WHERE id = $columnId");
-                } catch (Exception $e) {
-                    // Ignore
-                }
-            }
-            $db->exec("DELETE FROM custom_columns WHERE id = $columnId");
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'update_custom_column':
-            $columnId = intval($_POST['column_id']);
-            $columnName = $_POST['column_name'] ?? '';
-            $columnType = $_POST['column_type'] ?? 'text';
-            $stmt = $db->prepare("UPDATE custom_columns SET column_name = ?, column_type = ? WHERE id = ?");
-            $stmt->bindValue(1, $columnName, SQLITE3_TEXT);
-            $stmt->bindValue(2, $columnType, SQLITE3_TEXT);
-            $stmt->bindValue(3, $columnId, SQLITE3_INTEGER);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_page_permissions':
-            $pageId = intval($_POST['page_id'] ?? 1);
-            $result = $db->query("SELECT * FROM page_permissions WHERE page_id = $pageId");
-            $permissions = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $permissions[] = $row;
-            }
-            echo json_encode($permissions);
-            exit;
-            
-        case 'set_page_permission':
-            $pageId = intval($_POST['page_id']);
-            $username = $_POST['username'] ?? '';
-            $canView = intval($_POST['can_view'] ?? 1);
-            $canEdit = intval($_POST['can_edit'] ?? 0);
-            $stmt = $db->prepare("INSERT OR REPLACE INTO page_permissions (page_id, username, can_view, can_edit) VALUES (?, ?, ?, ?)");
-            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $username, SQLITE3_TEXT);
-            $stmt->bindValue(3, $canView, SQLITE3_INTEGER);
-            $stmt->bindValue(4, $canEdit, SQLITE3_INTEGER);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'check_permission':
-            $pageId = intval($_POST['page_id'] ?? 1);
-            $permission = $_POST['permission'] ?? 'view'; // 'view' or 'edit'
-            $result = $db->query("SELECT can_view, can_edit FROM page_permissions WHERE page_id = $pageId AND username = '$user'");
-            $row = $result->fetchArray(SQLITE3_ASSOC);
-            if ($row) {
-                $allowed = $permission === 'view' ? $row['can_view'] : $row['can_edit'];
-            } else {
-                // Default: allow if no permission set
-                $allowed = 1;
-            }
-            echo json_encode(['allowed' => $allowed]);
-            exit;
-            
-        // Comments/Chat
-        case 'add_comment':
-            $featureId = intval($_POST['feature_id']);
-            $comment = trim($_POST['comment'] ?? '');
-            if (empty($comment)) {
-                echo json_encode(['success' => false, 'message' => 'תגובה לא יכולה להיות ריקה']);
-                exit;
-            }
-            $stmt = $db->prepare("INSERT INTO feature_comments (feature_id, user, comment) VALUES (?, ?, ?)");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->bindValue(3, $comment, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            // Get feature info for notification
-            $stmt = $db->prepare("SELECT feature, category FROM features WHERE id = ?");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $featResult = $stmt->execute();
-            $featRow = $featResult->fetchArray(SQLITE3_ASSOC);
-            $featureName = $featRow['feature'] ?? 'Unknown';
-            
-            // Create notifications for all online users except the commenter
-            $stmt = $db->prepare("SELECT DISTINCT username FROM online_users WHERE username != ?");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $usersResult = $stmt->execute();
-            while ($userRow = $usersResult->fetchArray(SQLITE3_ASSOC)) {
-                $notifStmt = $db->prepare("INSERT INTO notifications (user, type, title, message, link) VALUES (?, 'comment', ?, ?, ?)");
-                $notifStmt->bindValue(1, $userRow['username'], SQLITE3_TEXT);
-                $notifStmt->bindValue(2, "תגובה חדשה", SQLITE3_TEXT);
-                $notifStmt->bindValue(3, "{$user} הגיב על {$featureName}", SQLITE3_TEXT);
-                $notifStmt->bindValue(4, "?feature_id={$featureId}", SQLITE3_TEXT);
-                $notifStmt->execute();
-            }
-            
-            // Update user online status
-            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            echo json_encode(['success' => true, 'id' => $db->lastInsertRowID()]);
-            exit;
-            
-        case 'get_comments':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT * FROM feature_comments WHERE feature_id = $featureId ORDER BY created_at DESC");
-            $comments = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $comments[] = $row;
-            }
-            echo json_encode($comments);
-            exit;
-            
-        // Likes/Dislikes
-        case 'toggle_like':
-            $featureId = intval($_POST['feature_id']);
-            $type = $_POST['type'] ?? 'like'; // 'like' or 'dislike'
-            
-            // Check if user already liked/disliked
-            $stmt = $db->prepare("SELECT id, type FROM feature_likes WHERE feature_id = ? AND user = ?");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $result = $stmt->execute();
-            $existing = $result->fetchArray(SQLITE3_ASSOC);
-            
-            if ($existing) {
-                if ($existing['type'] === $type) {
-                    // Remove like/dislike
-                    $stmt = $db->prepare("DELETE FROM feature_likes WHERE id = ?");
-                    $stmt->bindValue(1, $existing['id'], SQLITE3_INTEGER);
-                    $stmt->execute();
-                    echo json_encode(['success' => true, 'action' => 'removed']);
-                } else {
-                    // Change type
-                    $stmt = $db->prepare("UPDATE feature_likes SET type = ? WHERE id = ?");
-                    $stmt->bindValue(1, $type, SQLITE3_TEXT);
-                    $stmt->bindValue(2, $existing['id'], SQLITE3_INTEGER);
-                    $stmt->execute();
-                    echo json_encode(['success' => true, 'action' => 'changed']);
-                }
-            } else {
-                // Add new like/dislike
-                $stmt = $db->prepare("INSERT INTO feature_likes (feature_id, user, type) VALUES (?, ?, ?)");
-                $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-                $stmt->bindValue(2, $user, SQLITE3_TEXT);
-                $stmt->bindValue(3, $type, SQLITE3_TEXT);
-                $stmt->execute();
-                echo json_encode(['success' => true, 'action' => 'added']);
-            }
-            exit;
-            
-        case 'get_likes':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT type, COUNT(*) as count FROM feature_likes WHERE feature_id = $featureId GROUP BY type");
-            $likes = ['like' => 0, 'dislike' => 0, 'user_like' => null];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $likes[$row['type']] = intval($row['count']);
-            }
-            // Get user's like status
-            $stmt = $db->prepare("SELECT type FROM feature_likes WHERE feature_id = ? AND user = ?");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $result = $stmt->execute();
-            $userLike = $result->fetchArray(SQLITE3_ASSOC);
-            if ($userLike) {
-                $likes['user_like'] = $userLike['type'];
-            }
-            echo json_encode($likes);
-            exit;
-            
-        // Share
-        case 'share_feature':
-            $featureId = intval($_POST['feature_id']);
-            $sharedWith = trim($_POST['shared_with'] ?? '');
-            $stmt = $db->prepare("INSERT INTO feature_shares (feature_id, user, shared_with) VALUES (?, ?, ?)");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->bindValue(3, $sharedWith, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Attachments (Images and Files)
-        case 'upload_attachment':
-            $featureId = intval($_POST['feature_id'] ?? 0);
-            if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
-                echo json_encode(['success' => false, 'message' => 'שגיאה בהעלאת הקובץ']);
-                exit;
-            }
-            
-            $file = $_FILES['file'];
-            $uploadsDir = __DIR__ . '/uploads';
-            $fileName = time() . '_' . basename($file['name']);
-            $filePath = $uploadsDir . '/' . $fileName;
-            
-            if (move_uploaded_file($file['tmp_name'], $filePath)) {
-                $fileType = strpos($file['type'], 'image/') === 0 ? 'image' : 'file';
-                $stmt = $db->prepare("INSERT INTO feature_attachments (feature_id, user, file_name, file_path, file_type, file_size) VALUES (?, ?, ?, ?, ?, ?)");
-                $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-                $stmt->bindValue(2, $user, SQLITE3_TEXT);
-                $stmt->bindValue(3, $file['name'], SQLITE3_TEXT);
-                $stmt->bindValue(4, 'uploads/' . $fileName, SQLITE3_TEXT);
-                $stmt->bindValue(5, $fileType, SQLITE3_TEXT);
-                $stmt->bindValue(6, $file['size'], SQLITE3_INTEGER);
-                $stmt->execute();
-                echo json_encode(['success' => true, 'id' => $db->lastInsertRowID(), 'path' => 'uploads/' . $fileName]);
-            } else {
-                echo json_encode(['success' => false, 'message' => 'שגיאה בשמירת הקובץ']);
-            }
-            exit;
-            
-        case 'get_attachments':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT * FROM feature_attachments WHERE feature_id = $featureId ORDER BY created_at DESC");
-            $attachments = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $attachments[] = $row;
-            }
-            echo json_encode($attachments);
-            exit;
-            
-        case 'delete_attachment':
-            $attachmentId = intval($_POST['attachment_id']);
-            $result = $db->query("SELECT file_path FROM feature_attachments WHERE id = $attachmentId");
-            $attachment = $result->fetchArray(SQLITE3_ASSOC);
-            if ($attachment) {
-                $filePath = __DIR__ . '/' . $attachment['file_path'];
-                if (file_exists($filePath)) {
-                    unlink($filePath);
-                }
-            }
-            $db->exec("DELETE FROM feature_attachments WHERE id = $attachmentId");
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Feature Connections
-        case 'add_connection':
-            $featureId1 = intval($_POST['feature_id_1']);
-            $featureId2 = intval($_POST['feature_id_2']);
-            $connectionType = $_POST['connection_type'] ?? 'related';
-            if ($featureId1 == $featureId2) {
-                echo json_encode(['success' => false, 'message' => 'לא ניתן לחבר פיצ\'ר לעצמו']);
-                exit;
-            }
-            $stmt = $db->prepare("INSERT OR IGNORE INTO feature_connections (feature_id_1, feature_id_2, user, connection_type) VALUES (?, ?, ?, ?)");
-            $stmt->bindValue(1, $featureId1, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $featureId2, SQLITE3_INTEGER);
-            $stmt->bindValue(3, $user, SQLITE3_TEXT);
-            $stmt->bindValue(4, $connectionType, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_connections':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT fc.*, f1.feature as feature1_name, f2.feature as feature2_name 
-                FROM feature_connections fc
-                LEFT JOIN features f1 ON fc.feature_id_1 = f1.id
-                LEFT JOIN features f2 ON fc.feature_id_2 = f2.id
-                WHERE fc.feature_id_1 = $featureId OR fc.feature_id_2 = $featureId");
-            $connections = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $connections[] = $row;
-            }
-            echo json_encode($connections);
-            exit;
-            
-        case 'delete_connection':
-            $connectionId = intval($_POST['connection_id']);
-            $db->exec("DELETE FROM feature_connections WHERE id = $connectionId");
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Tags
-        case 'add_tag':
-            $featureId = intval($_POST['feature_id']);
-            $tag = trim($_POST['tag'] ?? '');
-            if (empty($tag)) {
-                echo json_encode(['success' => false, 'message' => 'תג לא יכול להיות ריק']);
-                exit;
-            }
-            $stmt = $db->prepare("INSERT OR IGNORE INTO feature_tags (feature_id, tag, user) VALUES (?, ?, ?)");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $tag, SQLITE3_TEXT);
-            $stmt->bindValue(3, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_tags':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT * FROM feature_tags WHERE feature_id = $featureId ORDER BY tag");
-            $tags = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $tags[] = $row;
-            }
-            echo json_encode($tags);
-            exit;
-            
-        case 'delete_tag':
-            $tagId = intval($_POST['tag_id']);
-            $db->exec("DELETE FROM feature_tags WHERE id = $tagId");
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Email tracking
-        case 'add_tracking':
-            $featureId = intval($_POST['feature_id']);
-            $email = trim($_POST['email'] ?? '');
-            if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                echo json_encode(['success' => false, 'message' => 'כתובת אימייל לא תקינה']);
-                exit;
-            }
-            $stmt = $db->prepare("INSERT OR IGNORE INTO feature_tracking (feature_id, email, user) VALUES (?, ?, ?)");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $email, SQLITE3_TEXT);
-            $stmt->bindValue(3, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'remove_tracking':
-            $featureId = intval($_POST['feature_id']);
-            $email = trim($_POST['email'] ?? '');
-            $stmt = $db->prepare("DELETE FROM feature_tracking WHERE feature_id = ? AND email = ?");
-            $stmt->bindValue(1, $featureId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $email, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_tracking':
-            $featureId = intval($_POST['feature_id']);
-            $result = $db->query("SELECT * FROM feature_tracking WHERE feature_id = $featureId ORDER BY created_at DESC");
-            $tracking = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $tracking[] = $row;
-            }
-            echo json_encode($tracking);
-            exit;
-            
-        // Move feature between pages
-        case 'move_feature':
-            $featureId = intval($_POST['feature_id']);
-            $newPageId = intval($_POST['new_page_id']);
-            $stmt = $db->prepare("UPDATE features SET page_id = ? WHERE id = ?");
-            $stmt->bindValue(1, $newPageId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $featureId, SQLITE3_INTEGER);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Notifications
-        case 'get_notifications':
-            $stmt = $db->prepare("SELECT * FROM notifications WHERE user = ? ORDER BY created_at DESC LIMIT 50");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $result = $stmt->execute();
-            $notifications = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $notifications[] = $row;
-            }
-            echo json_encode($notifications);
-            exit;
-            
-        case 'mark_notification_read':
-            $notifId = intval($_POST['notification_id']);
-            $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user = ?");
-            $stmt->bindValue(1, $notifId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'mark_all_notifications_read':
-            $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE user = ?");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Online users
-        case 'update_online_status':
-            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        case 'get_online_users':
-            // Get users who were active in last 5 minutes
-            $stmt = $db->query("SELECT username, last_seen FROM online_users WHERE datetime(last_seen) > datetime('now', '-5 minutes') ORDER BY last_seen DESC");
-            $users = [];
-            while ($row = $stmt->fetchArray(SQLITE3_ASSOC)) {
-                $users[] = $row;
-            }
-            echo json_encode($users);
-            exit;
-            
-        // Shared board
-        case 'get_shared_board_items':
-            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
-            $stmt = $db->prepare("SELECT * FROM shared_board_items WHERE page_id = ? ORDER BY created_at DESC");
-            $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
-            $result = $stmt->execute();
-            $items = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $items[] = $row;
-            }
-            echo json_encode($items);
-            exit;
-            
-        case 'save_shared_board_item':
-            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
-            $itemId = intval($_POST['item_id'] ?? 0);
-            $content = trim($_POST['content'] ?? '');
-            $positionX = floatval($_POST['position_x'] ?? 0);
-            $positionY = floatval($_POST['position_y'] ?? 0);
-            $color = $_POST['color'] ?? '#ffffff';
-            
-            if ($itemId > 0) {
-                $stmt = $db->prepare("UPDATE shared_board_items SET content = ?, position_x = ?, position_y = ?, color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user = ?");
-                $stmt->bindValue(1, $content, SQLITE3_TEXT);
-                $stmt->bindValue(2, $positionX, SQLITE3_FLOAT);
-                $stmt->bindValue(3, $positionY, SQLITE3_FLOAT);
-                $stmt->bindValue(4, $color, SQLITE3_TEXT);
-                $stmt->bindValue(5, $itemId, SQLITE3_INTEGER);
-                $stmt->bindValue(6, $user, SQLITE3_TEXT);
-                $stmt->execute();
-            } else {
-                $stmt = $db->prepare("INSERT INTO shared_board_items (page_id, user, content, position_x, position_y, color) VALUES (?, ?, ?, ?, ?, ?)");
-                $stmt->bindValue(1, $pageId, SQLITE3_INTEGER);
-                $stmt->bindValue(2, $user, SQLITE3_TEXT);
-                $stmt->bindValue(3, $content, SQLITE3_TEXT);
-                $stmt->bindValue(4, $positionX, SQLITE3_FLOAT);
-                $stmt->bindValue(5, $positionY, SQLITE3_FLOAT);
-                $stmt->bindValue(6, $color, SQLITE3_TEXT);
-                $stmt->execute();
-                $itemId = $db->lastInsertRowID();
-            }
-            
-            // Update user online status
-            $stmt = $db->prepare("INSERT OR REPLACE INTO online_users (username, last_seen) VALUES (?, CURRENT_TIMESTAMP)");
-            $stmt->bindValue(1, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            
-            echo json_encode(['success' => true, 'id' => $itemId]);
-            exit;
-            
-        case 'delete_shared_board_item':
-            $itemId = intval($_POST['item_id']);
-            $stmt = $db->prepare("DELETE FROM shared_board_items WHERE id = ? AND user = ?");
-            $stmt->bindValue(1, $itemId, SQLITE3_INTEGER);
-            $stmt->bindValue(2, $user, SQLITE3_TEXT);
-            $stmt->execute();
-            echo json_encode(['success' => true]);
-            exit;
-            
-        // Download Report
-        case 'download_report':
-            $pageId = intval($_POST['page_id'] ?? $currentPageId ?? 1);
-            $result = $db->query("SELECT f.*, 
-                (SELECT COUNT(*) FROM feature_comments WHERE feature_id = f.id) as comments_count,
-                (SELECT COUNT(*) FROM feature_likes WHERE feature_id = f.id AND type = 'like') as likes_count,
-                (SELECT COUNT(*) FROM feature_likes WHERE feature_id = f.id AND type = 'dislike') as dislikes_count,
-                (SELECT GROUP_CONCAT(tag, ', ') FROM feature_tags WHERE feature_id = f.id) as tags
-                FROM features f 
-                WHERE f.page_id = $pageId OR (f.page_id IS NULL AND $pageId = 1)
-                ORDER BY f.category, f.feature");
-            
-            $report = [];
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $report[] = $row;
-            }
-            echo json_encode($report);
-            exit;
-    }
-}
+// Note: All API request handling is now in api.php
 
 // Initialize database on page load
 $db = initDatabase();
 $user = getCurrentUser();
-
-// Get current page ID from request or default to 1
 $currentPageId = isset($_GET['page_id']) ? intval($_GET['page_id']) : 1;
 
 // Get page info
@@ -1104,12 +358,31 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
         
+        :root.dark-mode {
+            --primary-color: #3b82f6;
+            --primary-hover: #2563eb;
+            --success-color: #10b981;
+            --danger-color: #f87171;
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+            --bg-primary: #1f2937;
+            --bg-secondary: #111827;
+            --border-color: #374151;
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3), 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+        }
+        
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Arial Hebrew', 'David', sans-serif;
             background: #f3f4f6;
             min-height: 100vh;
             padding: 20px;
             direction: rtl;
+            transition: background 0.3s ease;
+        }
+        
+        :root.dark-mode body {
+            background: #111827;
         }
         
         .container {
@@ -1407,7 +680,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         .map-wrapper {
             position: relative;
             width: 100%;
-            height: 700px;
+            height: 1200px;
+            min-height: 800px;
             border: 1px solid var(--border-color);
             border-radius: 8px;
             margin-top: 24px;
@@ -2224,6 +1498,12 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             <symbol id="icon-link" viewBox="0 0 24 24">
                 <path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/>
             </symbol>
+            <symbol id="icon-sun" viewBox="0 0 24 24">
+                <path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41.39.39 1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41.39.39 1.03.39 1.41 0l1.06-1.06z"/>
+            </symbol>
+            <symbol id="icon-moon" viewBox="0 0 24 24">
+                <path d="M12.34 2.02C6.59 1.82 2 6.42 2 12c0 5.52 4.48 10 10 10 3.71 0 6.93-2.02 8.66-5.02-7.51-.25-13.09-6.8-13.09-14.38 0-.78.07-1.53.23-2.26z"/>
+            </symbol>
             <symbol id="icon-tag" viewBox="0 0 24 24">
                 <path d="M17.63 5.84C17.27 5.33 16.67 5 16 5L5 5.01C3.9 5.01 3 5.9 3 7.01v9.98c0 1.11.9 2.01 2 2.01L16 19c.67 0 1.27-.33 1.63-.84L22 12l-4.37-6.16z"/>
             </symbol>
@@ -2307,6 +1587,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 </button>
                 <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
                     <svg class="icon"><use href="#icon-users"></use></svg>
+                </button>
+                <button class="btn-icon" onclick="toggleDarkMode()" id="dark-mode-btn" title="מצב כהה/בהיר">
+                    <svg class="icon" id="dark-mode-icon"><use href="#icon-sun"></use></svg>
                 </button>
             </div>
         </div>
@@ -2629,7 +1912,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('field', 'description');
             formData.append('value', newValue);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2745,7 +2028,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         formData.append('action', 'get_shared_board_items');
                         formData.append('page_id', currentPageId);
                         
-                        fetch('', {
+                        fetch('api.php', {
                             method: 'POST',
                             body: formData
                         })
@@ -2819,7 +2102,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'get_notifications');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2863,7 +2146,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'mark_notification_read');
             formData.append('notification_id', notifId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2874,7 +2157,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'mark_all_notifications_read');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2886,7 +2169,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'update_online_status');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2897,7 +2180,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'get_online_users');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -2964,7 +2247,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_shared_board_items');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3073,7 +2356,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('position_y', item.position_y);
             formData.append('color', item.color);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3121,7 +2404,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_shared_board_item');
             formData.append('item_id', itemId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3183,7 +2466,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('field', field);
             formData.append('value', value);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3340,7 +2623,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 formData.append('action', 'delete');
                 formData.append('id', id);
                 
-                fetch('', {
+                fetch('api.php', {
                     method: 'POST',
                     body: formData
                 })
@@ -3420,7 +2703,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('color', color);
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3499,7 +2782,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'load_sysaid');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3530,7 +2813,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'load_sharepoint');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3561,7 +2844,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'get_stats');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3798,7 +3081,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_audit');
             formData.append('limit', 100);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3836,7 +3119,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             const formData = new FormData();
             formData.append('action', 'get_pages');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3885,7 +3168,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_data');
             formData.append('page_id', pageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3906,7 +3189,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'create_page');
             formData.append('title', title);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3928,7 +3211,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_page');
             formData.append('page_id', pageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3954,7 +3237,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('page_id', currentPageId);
             formData.append('title', title);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3968,11 +3251,63 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         function togglePageLock() {
+            const page = pages.find(p => p.id == currentPageId);
+            const currentLockState = page && page.is_locked ? 1 : 0;
+            const newLockState = 1 - currentLockState;
+            
+            // If unlocking, ask for PIN
+            if (newLockState === 0) {
+                const pin = prompt('הזן קוד PIN לפתיחת הדף:');
+                if (pin === null) return; // User cancelled
+                
+                const formData = new FormData();
+                formData.append('action', 'toggle_page_lock');
+                formData.append('page_id', currentPageId);
+                formData.append('lock_state', newLockState);
+                formData.append('pin', pin || '');
+                
+                fetch('api.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        loadPages();
+                        const updatedPage = pages.find(p => p.id == currentPageId);
+                        isPageLocked = updatedPage && updatedPage.is_locked;
+                        const lockBtn = document.getElementById('lock-btn');
+                        lockBtn.innerHTML = `<svg class="icon"><use href="#icon-${isPageLocked ? 'lock' : 'unlock'}"></use></svg>`;
+                        
+                        // Enable editing
+                        document.querySelectorAll('.editable').forEach(el => {
+                            el.disabled = false;
+                            el.style.opacity = '1';
+                        });
+                        
+                        showNotification('🔓 הדף נפתח', 'success');
+                    } else {
+                        showNotification('❌ ' + (data.message || 'שגיאה בפתיחת הדף'), 'error');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showNotification('❌ שגיאה בפתיחת הדף', 'error');
+                });
+                return;
+            }
+            
+            // If locking, ask for PIN (optional)
+            const pin = prompt('הזן קוד PIN לנעילת הדף (אופציונלי, השאר ריק):');
+            if (pin === null) return; // User cancelled
+            
             const formData = new FormData();
             formData.append('action', 'toggle_page_lock');
             formData.append('page_id', currentPageId);
+            formData.append('lock_state', newLockState);
+            formData.append('pin', pin || '');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -3980,21 +3315,26 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             .then(data => {
                 if (data.success) {
                     loadPages();
-                    const page = pages.find(p => p.id == currentPageId);
-                    isPageLocked = page && page.is_locked;
+                    const updatedPage = pages.find(p => p.id == currentPageId);
+                    isPageLocked = updatedPage && updatedPage.is_locked;
                     const lockBtn = document.getElementById('lock-btn');
                     lockBtn.innerHTML = `<svg class="icon"><use href="#icon-${isPageLocked ? 'lock' : 'unlock'}"></use></svg>`;
                     
-                    // Disable/enable editing based on lock
+                    // Disable editing
                     document.querySelectorAll('.editable').forEach(el => {
-                        el.disabled = isPageLocked;
-                        el.style.opacity = isPageLocked ? '0.6' : '1';
+                        el.disabled = true;
+                        el.style.opacity = '0.6';
                     });
                     
-                    showNotification(isPageLocked ? '🔒 הדף ננעל' : '🔓 הדף נפתח', 'success');
+                    showNotification('🔒 הדף ננעל' + (pin ? ' עם קוד PIN' : ''), 'success');
+                } else {
+                    showNotification('❌ ' + (data.message || 'שגיאה בנעילת הדף'), 'error');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error:', error);
+                showNotification('❌ שגיאה בנעילת הדף', 'error');
+            });
         }
         
         // Column management
@@ -4007,7 +3347,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_custom_columns');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4089,7 +3429,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('column_name', name);
             formData.append('column_type', type);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4128,7 +3468,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_custom_column');
             formData.append('column_id', columnId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4151,7 +3491,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('column_name', name);
             formData.append('column_type', document.querySelector(`select[onchange*="${columnId}"]`).value);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4171,7 +3511,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('column_type', type);
             formData.append('column_name', document.querySelector(`input[onchange*="${columnId}"]`).value);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4194,7 +3534,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_page_permissions');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4250,7 +3590,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('can_view', canView);
             formData.append('can_edit', canEdit);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4270,7 +3610,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_page_permissions');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4449,7 +3789,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_data');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4770,7 +4110,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_comments');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4804,7 +4144,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('comment', comment);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4826,7 +4166,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('type', type);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4844,7 +4184,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_likes');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4875,7 +4215,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('shared_with', sharedWith);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4915,7 +4255,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_attachments');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4953,7 +4293,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('file', fileInput.files[0]);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -4980,7 +4320,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_attachment');
             formData.append('attachment_id', attachmentId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5024,7 +4364,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_connections');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5056,7 +4396,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_data');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5087,7 +4427,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id_2', otherFeatureId);
             formData.append('connection_type', 'related');
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5109,7 +4449,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_connection');
             formData.append('connection_id', connectionId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5151,7 +4491,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_tracking');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5188,7 +4528,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('email', email);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5214,7 +4554,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('email', email);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5254,7 +4594,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'get_tags');
             formData.append('feature_id', featureId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5285,7 +4625,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('tag', tag);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5307,7 +4647,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'delete_tag');
             formData.append('tag_id', tagId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5338,7 +4678,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('feature_id', featureId);
             formData.append('new_page_id', newPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5358,7 +4698,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             formData.append('action', 'download_report');
             formData.append('page_id', currentPageId);
             
-            fetch('', {
+            fetch('api.php', {
                 method: 'POST',
                 body: formData
             })
@@ -5385,7 +4725,37 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         // Initialize on page load
+        // Dark mode toggle
+        function toggleDarkMode() {
+            const root = document.documentElement;
+            const isDark = root.classList.contains('dark-mode');
+            const icon = document.getElementById('dark-mode-icon');
+            
+            if (isDark) {
+                root.classList.remove('dark-mode');
+                icon.querySelector('use').setAttribute('href', '#icon-moon');
+                localStorage.setItem('darkMode', 'false');
+            } else {
+                root.classList.add('dark-mode');
+                icon.querySelector('use').setAttribute('href', '#icon-sun');
+                localStorage.setItem('darkMode', 'true');
+            }
+        }
+        
+        // Initialize dark mode from localStorage
         window.addEventListener('load', function() {
+            const darkMode = localStorage.getItem('darkMode');
+            const root = document.documentElement;
+            const icon = document.getElementById('dark-mode-icon');
+            
+            if (darkMode === 'true') {
+                root.classList.add('dark-mode');
+                if (icon) icon.querySelector('use').setAttribute('href', '#icon-sun');
+            } else {
+                root.classList.remove('dark-mode');
+                if (icon) icon.querySelector('use').setAttribute('href', '#icon-moon');
+            }
+            
             renderPageTabs();
             
             // Apply auto-linking to all text content
