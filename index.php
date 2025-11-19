@@ -58,6 +58,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     <link rel="apple-touch-icon" href="icon-192.svg">
     <link rel="icon" type="image/svg+xml" href="icon-192.svg">
     
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    
     <!-- Chart.js -->
     <script src="chart.umd.min.js" onerror="loadChartJSFromCDN()"></script>
     <script>
@@ -74,39 +77,44 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
     </script>
     
     <!-- vis-network -->
-    <script type="text/javascript" src="vis-network.min.js" onerror="loadVisNetworkFromCDN()"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <script>
-        function loadVisNetworkFromCDN() {
-            if (typeof vis === 'undefined' || !vis.Network) {
-                console.log('Loading vis-network from CDN...');
+        // Fallback if CDN fails
+        window.addEventListener('error', function(e) {
+            if (e.target && e.target.src && e.target.src.includes('vis-network')) {
+                console.error('vis-network CDN failed, trying local file...');
                 const script = document.createElement('script');
-                script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
-                script.onload = function() {
-                    console.log('vis-network loaded successfully from CDN');
-                    // Try to load map if it was requested
-                    if (typeof loadMap === 'function') {
-                        setTimeout(loadMap, 100);
-                    }
-                };
+                script.src = 'vis-network.min.js';
                 script.onerror = function() {
-                    console.error('Failed to load vis-network from CDN');
-                    const container = document.getElementById('feature-map');
-                    if (container) {
-                        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: לא ניתן לטעון את ספריית vis-network מכל המקורות. אנא בדוק את חיבור האינטרנט או העלה את הקובץ vis-network.min.js לתיקייה.</p>';
-                    }
+                    console.error('Both CDN and local vis-network failed');
                 };
                 document.head.appendChild(script);
             }
+        }, true);
+        
+        // Ensure vis-network is available
+        function ensureVisNetwork(callback) {
+            let attempts = 0;
+            const maxAttempts = 20;
+            const checkInterval = setInterval(function() {
+                attempts++;
+                if (typeof vis !== 'undefined' && vis.Network) {
+                    clearInterval(checkInterval);
+                    console.log('vis-network is ready after', attempts * 100, 'ms');
+                    if (callback) callback();
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                    console.error('vis-network failed to load after', maxAttempts * 100, 'ms');
+                    if (callback) callback(false);
+                }
+            }, 100);
         }
         
-        // Check if vis-network is loaded after page load
-        window.addEventListener('load', function() {
-            setTimeout(function() {
-                if (typeof vis === 'undefined' || !vis.Network) {
-                    console.warn('vis-network not loaded, attempting CDN load...');
-                    loadVisNetworkFromCDN();
-                }
-            }, 500);
+        // Pre-load vis-network
+        ensureVisNetwork(function(success) {
+            if (success) {
+                console.log('vis-network pre-loaded successfully');
+            }
         });
     </script>
     
@@ -647,10 +655,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             box-shadow: var(--shadow-md);
         }
         
-        .btn-icon .icon {
-            width: 20px;
-            height: 20px;
-            fill: currentColor;
+        .btn-icon .fas, .btn-icon .far, .btn-icon .fal {
+            font-size: 18px;
         }
         
         .page-tabs-container {
@@ -957,23 +963,20 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             border-radius: 4px;
         }
         
-        /* SVG Icons */
-        .icon {
-            width: 18px;
-            height: 18px;
+        /* Font Awesome Icons */
+        .icon, .fas, .far, .fal {
+            font-size: 16px;
+            line-height: 1;
             display: inline-block;
             vertical-align: middle;
-            fill: currentColor;
         }
         
-        .icon-large {
-            width: 24px;
-            height: 24px;
+        .icon-large, .fas.icon-large, .far.icon-large, .fal.icon-large {
+            font-size: 24px;
         }
         
-        .icon-small {
-            width: 14px;
-            height: 14px;
+        .icon-small, .fas.icon-small, .far.icon-small, .fal.icon-small {
+            font-size: 14px;
         }
         
         /* Footer */
@@ -1343,7 +1346,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 </div>
                 <div id="notifications-container" style="position: relative;">
                     <button class="btn-icon" onclick="toggleNotifications(); event.stopPropagation();" id="notifications-btn" title="התראות">
-                        <svg class="icon"><use href="#icon-bell"></use></svg>
+                        <i class="fas fa-bell"></i>
                         <span id="notifications-badge" style="display: none; position: absolute; top: -4px; left: -4px; background: #ef4444; color: white; border-radius: 50%; width: 18px; height: 18px; font-size: 11px; line-height: 18px; text-align: center; font-weight: bold;">0</span>
                     </button>
                     <div id="notifications-dropdown" class="notifications-dropdown" style="display: none;">
@@ -1355,23 +1358,23 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     </div>
                 </div>
                 <button class="btn-icon" onclick="togglePageLock()" id="lock-btn" title="נעל/פתח דף">
-                    <svg class="icon"><use href="#icon-<?php echo $currentPage['is_locked'] ? 'lock' : 'unlock'; ?>"></use></svg>
+                    <i class="fas fa-<?php echo $currentPage['is_locked'] ? 'lock' : 'unlock'; ?>"></i>
                 </button>
                 <button class="btn-icon" onclick="showColumnManager()" title="נהל עמודות">
-                    <svg class="icon"><use href="#icon-settings"></use></svg>
+                    <i class="fas fa-cog"></i>
                 </button>
                 <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
-                    <svg class="icon"><use href="#icon-users"></use></svg>
+                    <i class="fas fa-users"></i>
                 </button>
                 <button class="btn-icon" onclick="toggleDarkMode()" id="dark-mode-btn" title="מצב כהה/בהיר">
-                    <svg class="icon" id="dark-mode-icon"><use href="#icon-sun"></use></svg>
+                    <i class="fas fa-sun" id="dark-mode-icon"></i>
                 </button>
             </div>
         </div>
         <p class="subtitle">מערכת ניהול פיצ'רים</p>
         
         <div class="user-info" style="display: flex; align-items: center; justify-content: center;">
-            <svg class="icon" style="margin-left: 4px;"><use href="#icon-users"></use></svg>
+            <i class="fas fa-user" style="margin-left: 4px;"></i>
             משתמש: <strong><?php echo htmlspecialchars($user); ?></strong>
         </div>
         
@@ -1379,45 +1382,45 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         <div class="page-tabs-container" id="page-tabs-container">
             <div class="page-tabs" id="page-tabs"></div>
             <button class="btn-success btn-small" onclick="createNewPage()">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
+                <i class="fas fa-plus" style="margin-left: 4px;"></i>
                 דף חדש
             </button>
         </div>
         
         <div class="controls">
             <button class="btn-success" onclick="addNewRow()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
+                <i class="fas fa-plus" style="margin-left: 4px;"></i>
                 הוסף שורה חדשה
             </button>
             <button class="btn-primary" onclick="refreshData()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-refresh"></use></svg>
+                <i class="fas fa-sync-alt" style="margin-left: 4px;"></i>
                 רענן נתונים
             </button>
             <button class="btn-success" onclick="downloadReport()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-download"></use></svg>
+                <i class="fas fa-download" style="margin-left: 4px;"></i>
                 הורד דוח
             </button>
         </div>
         
         <div class="tabs">
             <button class="tab active" onclick="showTab('table')">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-table"></use></svg>
+                <i class="fas fa-table" style="margin-left: 4px;"></i>
                 טבלת פיצ'רים
             </button>
             <button class="tab" onclick="showTab('dashboard')">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-chart"></use></svg>
+                <i class="fas fa-chart-bar" style="margin-left: 4px;"></i>
                 דשבורד
             </button>
             <button class="tab" onclick="showTab('map')">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-map"></use></svg>
+                <i class="fas fa-project-diagram" style="margin-left: 4px;"></i>
                 מפת פיצ'רים
             </button>
             <button class="tab" onclick="showTab('audit')">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-audit"></use></svg>
+                <i class="fas fa-file-alt" style="margin-left: 4px;"></i>
                 לוג Audit
             </button>
             <button class="tab" onclick="showTab('board')">
-                <svg class="icon icon-small" style="margin-left: 4px;"><use href="#icon-page"></use></svg>
+                <i class="fas fa-sticky-note" style="margin-left: 4px;"></i>
                 לוח משותף
             </button>
         </div>
@@ -1427,7 +1430,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             <div class="search-container">
                 <input type="text" id="search-input" class="search-input" placeholder="חפש פיצ'רים, קטגוריות, תיאורים..." onkeyup="filterTable()">
                 <span class="search-icon">
-                    <svg class="icon"><use href="#icon-search"></use></svg>
+                    <i class="fas fa-search"></i>
                 </span>
             </div>
             <table id="features-table">
@@ -1466,37 +1469,37 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         <td>
                             <div class="action-buttons" style="display: flex; gap: 4px; flex-wrap: wrap;">
                                 <button class="action-btn" onclick="showFeatureActions(<?php echo $feat['id']; ?>)" title="פעולות">
-                                    <svg class="icon icon-small"><use href="#icon-settings"></use></svg>
+                                    <i class="fas fa-cog"></i>
                                 </button>
                                 <button class="action-btn like-btn" onclick="toggleLike(<?php echo $feat['id']; ?>, 'like')" id="like-btn-<?php echo $feat['id']; ?>" title="לייק">
-                                    <svg class="icon icon-small"><use href="#icon-like"></use></svg>
+                                    <i class="fas fa-thumbs-up"></i>
                                 </button>
                                 <button class="action-btn dislike-btn" onclick="toggleLike(<?php echo $feat['id']; ?>, 'dislike')" id="dislike-btn-<?php echo $feat['id']; ?>" title="דיסלייק">
-                                    <svg class="icon icon-small"><use href="#icon-dislike"></use></svg>
+                                    <i class="fas fa-thumbs-down"></i>
                                 </button>
                                 <button class="action-btn" onclick="showComments(<?php echo $feat['id']; ?>)" title="תגובות">
-                                    <svg class="icon icon-small"><use href="#icon-comment"></use></svg>
+                                    <i class="fas fa-comment"></i>
                                 </button>
                                 <button class="action-btn" onclick="showShareModal(<?php echo $feat['id']; ?>)" title="שתף">
-                                    <svg class="icon icon-small"><use href="#icon-share"></use></svg>
+                                    <i class="fas fa-share-alt"></i>
                                 </button>
                                 <button class="action-btn" onclick="showAttachments(<?php echo $feat['id']; ?>)" title="קבצים">
-                                    <svg class="icon icon-small"><use href="#icon-attachment"></use></svg>
+                                    <i class="fas fa-paperclip"></i>
                                 </button>
                                 <button class="action-btn" onclick="showConnections(<?php echo $feat['id']; ?>)" title="חיבורים">
-                                    <svg class="icon icon-small"><use href="#icon-link"></use></svg>
+                                    <i class="fas fa-link"></i>
                                 </button>
                                 <button class="action-btn" onclick="showTags(<?php echo $feat['id']; ?>)" title="תגיות">
-                                    <svg class="icon icon-small"><use href="#icon-tag"></use></svg>
+                                    <i class="fas fa-tag"></i>
                                 </button>
                                 <button class="action-btn" onclick="showEmailTracking(<?php echo $feat['id']; ?>)" title="מעקב אימייל">
-                                    <svg class="icon icon-small"><use href="#icon-settings"></use></svg> 📧
+                                    <i class="fas fa-cog"></i> 📧
                                 </button>
                                 <button class="action-btn" onclick="showMoveFeature(<?php echo $feat['id']; ?>)" title="העבר דף">
-                                    <svg class="icon icon-small"><use href="#icon-page"></use></svg>
+                                    <i class="fas fa-file"></i>
                                 </button>
                                 <button class="delete-btn" onclick="deleteRow(<?php echo $feat['id']; ?>)" title="מחק">
-                                    <svg class="icon icon-small"><use href="#icon-delete"></use></svg>
+                                    <i class="fas fa-trash-alt"></i>
                                 </button>
                             </div>
                         </td>
@@ -1505,7 +1508,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 </tbody>
             </table>
             <button class="add-row" onclick="addNewRow()">
-                <svg class="icon" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
+                <i class="fas fa-plus" style="margin-left: 4px;"></i>
                 הוסף שורה חדשה
             </button>
         </div>
@@ -1529,17 +1532,41 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             <div class="map-layout">
                 <div class="map-sidebar" id="map-sidebar">
                     <h3>עריכת מפה</h3>
-                    <button class="map-control-btn" onclick="toggleMapEditMode()" id="map-edit-btn">✏️ מצב עריכה</button>
-                    <button class="map-control-btn" onclick="addMapNode()">➕ הוסף צומת</button>
-                    <button class="map-control-btn" onclick="addMapEdge()">🔗 הוסף קישור</button>
-                    <button class="map-control-btn" onclick="deleteSelectedNode()">🗑️ מחק נבחר</button>
+                    <button class="map-control-btn" onclick="toggleMapEditMode()" id="map-edit-btn">
+                        <i class="fas fa-edit" style="margin-left: 6px;"></i>
+                        מצב עריכה
+                    </button>
+                    <button class="map-control-btn" onclick="addMapNode()">
+                        <i class="fas fa-plus-circle" style="margin-left: 6px;"></i>
+                        הוסף צומת
+                    </button>
+                    <button class="map-control-btn" onclick="addMapEdge()">
+                        <i class="fas fa-link" style="margin-left: 6px;"></i>
+                        הוסף קישור
+                    </button>
+                    <button class="map-control-btn" onclick="deleteSelectedNode()">
+                        <i class="fas fa-trash-alt" style="margin-left: 6px;"></i>
+                        מחק נבחר
+                    </button>
                 </div>
                 <div class="map-wrapper">
                     <div class="map-controls">
-                        <button class="map-control-btn" onclick="fitMap()">📐 התאם למסך</button>
-                        <button class="map-control-btn" onclick="centerMap()">🎯 מרכז</button>
-                        <button class="map-control-btn" onclick="resetMap()">🔄 איפוס</button>
-                        <button class="map-control-btn" onclick="toggleMapSidebar()">📋 הצג/הסתר תפריט</button>
+                        <button class="map-control-btn" onclick="fitMap()">
+                            <i class="fas fa-expand-arrows-alt" style="margin-left: 6px;"></i>
+                            התאם למסך
+                        </button>
+                        <button class="map-control-btn" onclick="centerMap()">
+                            <i class="fas fa-crosshairs" style="margin-left: 6px;"></i>
+                            מרכז
+                        </button>
+                        <button class="map-control-btn" onclick="resetMap()">
+                            <i class="fas fa-redo" style="margin-left: 6px;"></i>
+                            איפוס
+                        </button>
+                        <button class="map-control-btn" onclick="toggleMapSidebar()">
+                            <i class="fas fa-bars" style="margin-left: 6px;"></i>
+                            הצג/הסתר תפריט
+                        </button>
                     </div>
                     <div class="map-container" id="feature-map"></div>
                 </div>
@@ -1552,7 +1579,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             <div class="search-container">
                 <input type="text" id="audit-search-input" class="search-input" placeholder="חפש בלוג..." onkeyup="filterAudit()">
                 <span class="search-icon">
-                    <svg class="icon"><use href="#icon-search"></use></svg>
+                    <i class="fas fa-search"></i>
                 </span>
             </div>
             <div class="audit-log" id="audit-log">
@@ -1568,7 +1595,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.9;">כולם יכולים להוסיף ולערוך פתקים כאן בזמן אמת</p>
                 </div>
                 <button class="btn-success" onclick="addBoardItem()" style="background: white; color: #667eea; border: none; font-weight: 600;">
-                    <svg class="icon" style="margin-left: 4px;"><use href="#icon-add"></use></svg>
+                    <i class="fas fa-plus" style="margin-left: 4px;"></i>
                     הוסף פתק
                 </button>
             </div>
@@ -2448,7 +2475,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 <td>-</td>
                 <td>-</td>
                 <td><button class="delete-btn" onclick="this.closest('tr').remove()">
-                    <svg class="icon icon-small"><use href="#icon-delete"></use></svg>
+                    <i class="fas fa-trash-alt icon-small"></i>
                     ביטול
                 </button></td>
             `;
@@ -3085,7 +3112,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         const updatedPage = pages.find(p => p.id == currentPageId);
                         isPageLocked = updatedPage && updatedPage.is_locked;
                         const lockBtn = document.getElementById('lock-btn');
-                        lockBtn.innerHTML = `<svg class="icon"><use href="#icon-${isPageLocked ? 'lock' : 'unlock'}"></use></svg>`;
+                        lockBtn.innerHTML = `<i class="fas fa-${isPageLocked ? 'lock' : 'unlock'}"></i>`;
                         
                         // Enable editing
                         document.querySelectorAll('.editable').forEach(el => {
@@ -3359,7 +3386,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                             <div class="search-container" style="margin-bottom: 16px;">
                                 <input type="text" id="permissions-search-input" class="search-input" placeholder="חפש משתמש..." onkeyup="filterPermissions()">
                                 <span class="search-icon">
-                                    <svg class="icon"><use href="#icon-search"></use></svg>
+                                    <i class="fas fa-search"></i>
                                 </span>
                             </div>
                             <div id="permissions-list">
@@ -3570,39 +3597,24 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 return;
             }
             
-            // Check if vis-network is loaded, wait and retry if not
-            if (typeof vis === 'undefined' || !vis.Network) {
-                console.log('vis-network not loaded, vis:', typeof vis, 'vis.Network:', typeof vis !== 'undefined' ? typeof vis.Network : 'N/A');
-                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #6b7280;">⏳ טוען מפה...</p>';
-                
-                // Try to load from CDN if local file failed
-                if (typeof vis === 'undefined') {
-                    console.log('Loading vis-network from CDN...');
-                    const script = document.createElement('script');
-                    script.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
-                    script.onload = function() {
-                        console.log('vis-network loaded from CDN successfully');
-                        setTimeout(() => {
-                            if (typeof vis !== 'undefined' && vis.Network) {
-                                loadMap();
-                            } else {
-                                console.error('vis-network still not available after CDN load');
-                                container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: vis-network לא נטען. נסה לרענן את הדף.</p>';
-                            }
-                        }, 200);
-                    };
-                    script.onerror = function() {
-                        container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: לא ניתן לטעון את ספריית vis-network. אנא בדוק את חיבור האינטרנט.</p>';
-                        console.error('Failed to load vis-network from CDN');
-                    };
-                    document.head.appendChild(script);
-                } else {
-                    // Retry after a short delay
-                    console.log('vis exists but Network not available, retrying...');
-                    setTimeout(loadMap, 500);
+            // Show loading message
+            container.innerHTML = '<div style="padding: 40px; text-align: center;"><i class="fas fa-spinner fa-spin" style="font-size: 32px; color: var(--primary-color); margin-bottom: 16px;"></i><p style="color: var(--text-secondary);">טוען מפה...</p></div>';
+            
+            // Use ensureVisNetwork to wait for vis-network to be ready
+            ensureVisNetwork(function(success) {
+                if (!success || typeof vis === 'undefined' || !vis.Network) {
+                    console.error('vis-network not available after waiting');
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: #ef4444;"><i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 16px;"></i><p>❌ שגיאה: לא ניתן לטעון את ספריית vis-network</p><button class="btn-primary" onclick="loadMap()" style="margin-top: 16px;">נסה שוב</button></div>';
+                    return;
                 }
-                return;
-            }
+                
+                console.log('vis-network is ready, fetching map data...');
+                loadMapData();
+            });
+        }
+        
+        function loadMapData() {
+            const container = document.getElementById('feature-map');
             
             console.log('vis-network is loaded, fetching data...');
             const formData = new FormData();
@@ -3631,11 +3643,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 }
                 
                 // Double-check vis-network is loaded
-                if (typeof vis === 'undefined' || !vis.Network) {
-                    console.error('vis-network still not loaded after fetch, vis:', typeof vis, 'Network:', typeof vis !== 'undefined' ? typeof vis.Network : 'N/A');
-                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה: ספריית vis-network לא נטענה. מנסה לטעון מחדש...</p>';
-                    loadVisNetworkFromCDN();
-                    setTimeout(loadMap, 2000);
+                if (typeof vis === 'undefined' || !vis.Network || !vis.DataSet) {
+                    console.error('vis-network still not loaded after fetch, vis:', typeof vis, 'Network:', typeof vis !== 'undefined' ? typeof vis.Network : 'N/A', 'DataSet:', typeof vis !== 'undefined' ? typeof vis.DataSet : 'N/A');
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: #ef4444;"><i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 16px;"></i><p>❌ שגיאה: ספריית vis-network לא נטענה</p><button class="btn-primary" onclick="loadMap()" style="margin-top: 16px;">נסה שוב</button></div>';
                     return;
                 }
                 
@@ -3717,8 +3727,11 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     return;
                 }
                 
-                const container = document.getElementById('feature-map');
-                const networkData = { nodes: nodes, edges: edges };
+                // Ensure DataSets are used for vis-network
+                const networkData = { 
+                    nodes: new vis.DataSet(nodes), 
+                    edges: new vis.DataSet(edges) 
+                };
                 const options = {
                     nodes: {
                         font: { size: 12, face: 'Arial' },
@@ -3784,12 +3797,18 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     }
                     
                     console.log('Creating new vis.Network...');
-                    if (!vis || !vis.Network) {
-                        throw new Error('vis.Network is not available');
+                    if (!vis || !vis.Network || !vis.DataSet) {
+                        throw new Error('vis.Network or vis.DataSet is not available');
+                    }
+                    
+                    // Ensure container is visible
+                    const mapTab = document.getElementById('map-tab');
+                    if (mapTab && !mapTab.classList.contains('active')) {
+                        console.warn('Map tab is not active, network may not render correctly');
                     }
                     
                     network = new vis.Network(container, networkData, options);
-                    console.log('Network created successfully');
+                    console.log('Network created successfully, waiting for stabilization...');
                     
                     // Node selection
                     network.on('click', function(params) {
@@ -3875,14 +3894,14 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     }, 1500);
                 } catch (error) {
                     console.error('Error creating network:', error);
-                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה ביצירת המפה: ' + error.message + '</p><p style="text-align: center; margin-top: 10px;"><button class="btn-primary" onclick="loadMap()">נסה שוב</button></p>';
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: #ef4444;"><i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 16px;"></i><p>❌ שגיאה ביצירת המפה: ' + error.message + '</p><button class="btn-primary" onclick="loadMap()" style="margin-top: 16px;">נסה שוב</button></div>';
                 }
             })
             .catch(error => {
                 console.error('Error loading map:', error);
                 const container = document.getElementById('feature-map');
                 if (container) {
-                    container.innerHTML = '<p style="padding: 20px; text-align: center; color: #ef4444;">❌ שגיאה בטעינת המפה: ' + error.message + '</p><p style="text-align: center; margin-top: 10px;"><button class="btn-primary" onclick="loadMap()">נסה שוב</button></p>';
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: #ef4444;"><i class="fas fa-exclamation-triangle" style="font-size: 32px; margin-bottom: 16px;"></i><p>❌ שגיאה בטעינת המפה: ' + error.message + '</p><button class="btn-primary" onclick="loadMap()" style="margin-top: 16px;">נסה שוב</button></div>';
                 }
             });
         }
@@ -4629,11 +4648,11 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             if (isDark) {
                 root.classList.remove('dark-mode');
-                icon.querySelector('use').setAttribute('href', '#icon-moon');
+                icon.className = 'fas fa-moon';
                 localStorage.setItem('darkMode', 'false');
             } else {
                 root.classList.add('dark-mode');
-                icon.querySelector('use').setAttribute('href', '#icon-sun');
+                icon.className = 'fas fa-sun';
                 localStorage.setItem('darkMode', 'true');
             }
         }
@@ -4646,10 +4665,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             if (darkMode === 'true') {
                 root.classList.add('dark-mode');
-                if (icon) icon.querySelector('use').setAttribute('href', '#icon-sun');
+                if (icon) icon.className = 'fas fa-sun';
             } else {
                 root.classList.remove('dark-mode');
-                if (icon) icon.querySelector('use').setAttribute('href', '#icon-moon');
+                if (icon) icon.className = 'fas fa-moon';
             }
             
             renderPageTabs();
