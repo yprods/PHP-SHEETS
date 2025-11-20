@@ -1403,23 +1403,23 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         </div>
         
         <div class="tabs">
-            <button class="tab active" onclick="showTab('table')">
+            <button class="tab active" onclick="showTab('table', event)">
                 <i class="fas fa-table" style="margin-left: 4px;"></i>
                 טבלת פיצ'רים
             </button>
-            <button class="tab" onclick="showTab('dashboard')">
+            <button class="tab" onclick="showTab('dashboard', event)">
                 <i class="fas fa-chart-bar" style="margin-left: 4px;"></i>
                 דשבורד
             </button>
-            <button class="tab" onclick="showTab('map')">
+            <button class="tab" onclick="showTab('map', event)">
                 <i class="fas fa-project-diagram" style="margin-left: 4px;"></i>
                 מפת פיצ'רים
             </button>
-            <button class="tab" onclick="showTab('audit')">
+            <button class="tab" onclick="showTab('audit', event)">
                 <i class="fas fa-file-alt" style="margin-left: 4px;"></i>
                 לוג Audit
             </button>
-            <button class="tab" onclick="showTab('board')">
+            <button class="tab" onclick="showTab('board', event)">
                 <i class="fas fa-sticky-note" style="margin-left: 4px;"></i>
                 לוח משותף
             </button>
@@ -2225,11 +2225,28 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         let network = null;
         
         // Tab switching
-        function showTab(tabName) {
+        function showTab(tabName, event) {
+            // Remove active class from all tabs and tab contents
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
-            document.getElementById(tabName + '-tab').classList.add('active');
+            
+            // Add active class to clicked tab
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Fallback: find tab button by tabName
+                document.querySelectorAll('.tab').forEach(tab => {
+                    if (tab.onclick && tab.onclick.toString().includes(tabName)) {
+                        tab.classList.add('active');
+                    }
+                });
+            }
+            
+            // Activate corresponding tab content
+            const tabContent = document.getElementById(tabName + '-tab');
+            if (tabContent) {
+                tabContent.classList.add('active');
+            }
             
             if (tabName === 'dashboard') {
                 loadDashboard();
@@ -3462,7 +3479,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 updateFormData.append('can_view', canView);
                 updateFormData.append('can_edit', canEdit);
                 
-                return fetch('', {
+                return fetch('api.php', {
                     method: 'POST',
                     body: updateFormData
                 });
@@ -3485,8 +3502,12 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         function toggleMapEditMode() {
             mapEditMode = !mapEditMode;
             const btn = document.getElementById('map-edit-btn');
-            btn.textContent = mapEditMode ? '👁️ מצב צפייה' : '✏️ מצב עריכה';
-            btn.style.background = mapEditMode ? '#10b981' : '#2563eb';
+            if (btn) {
+                btn.innerHTML = mapEditMode ? 
+                    '<i class="fas fa-eye" style="margin-left: 6px;"></i> מצב צפייה' : 
+                    '<i class="fas fa-edit" style="margin-left: 6px;"></i> מצב עריכה';
+                btn.style.background = mapEditMode ? '#10b981' : '#2563eb';
+            }
             
             if (network) {
                 network.setOptions({
