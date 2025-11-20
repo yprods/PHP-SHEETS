@@ -10,7 +10,7 @@
 // Include API for POST requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     require_once __DIR__ . '/api.php';
-    exit;
+            exit;
 }
 
 // Include API functions for page load (only functions, not the POST handler)
@@ -95,13 +95,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         // Ensure vis-network is available
         function ensureVisNetwork(callback) {
             let attempts = 0;
-            const maxAttempts = 20;
+            const maxAttempts = 30; // Increased for better reliability
             const checkInterval = setInterval(function() {
                 attempts++;
-                if (typeof vis !== 'undefined' && vis.Network) {
+                if (typeof vis !== 'undefined' && vis.Network && vis.DataSet) {
                     clearInterval(checkInterval);
-                    console.log('vis-network is ready after', attempts * 100, 'ms');
-                    if (callback) callback();
+                    console.log('vis-network is ready (Network + DataSet) after', attempts * 100, 'ms');
+                    if (callback) callback(true);
                 } else if (attempts >= maxAttempts) {
                     clearInterval(checkInterval);
                     console.error('vis-network failed to load after', maxAttempts * 100, 'ms');
@@ -1357,19 +1357,19 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         <div id="notifications-list" class="notifications-list" onclick="event.stopPropagation();"></div>
                     </div>
                 </div>
-                <button class="btn-icon" onclick="togglePageLock()" id="lock-btn" title="נעל/פתח דף">
+            <button class="btn-icon" onclick="togglePageLock()" id="lock-btn" title="נעל/פתח דף">
                     <i class="fas fa-<?php echo $currentPage['is_locked'] ? 'lock' : 'unlock'; ?>"></i>
-                </button>
-                <button class="btn-icon" onclick="showColumnManager()" title="נהל עמודות">
+            </button>
+            <button class="btn-icon" onclick="showColumnManager()" title="נהל עמודות">
                     <i class="fas fa-cog"></i>
-                </button>
-                <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
+            </button>
+            <button class="btn-icon" onclick="showPermissionsModal()" title="הרשאות">
                     <i class="fas fa-users"></i>
                 </button>
                 <button class="btn-icon" onclick="toggleDarkMode()" id="dark-mode-btn" title="מצב כהה/בהיר">
                     <i class="fas fa-sun" id="dark-mode-icon"></i>
-                </button>
-            </div>
+            </button>
+        </div>
         </div>
         <p class="subtitle">מערכת ניהול פיצ'רים</p>
         
@@ -1463,7 +1463,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                 <textarea class="editable description-edit" data-field="description" onblur="saveFieldAndHide(this)" rows="2" style="display: none;"><?php echo htmlspecialchars($feat['description']); ?></textarea>
                             </div>
                         </td>
-                        <td><input type="color" class="color-input editable" data-field="color" value="<?php echo htmlspecialchars($feat['color']); ?>" onchange="saveField(this)" /></td>
+                        <td><input type="color" class="color-input editable" data-field="color" value="<?php echo htmlspecialchars($feat['color']); ?>" onchange="updateRowColorFromInput(this); saveField(this);" /></td>
                         <td><?php echo htmlspecialchars($feat['user']); ?></td>
                         <td><?php echo htmlspecialchars($feat['updated_at']); ?></td>
                         <td>
@@ -1798,10 +1798,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                             }
                         });
                     });
-                })
-                .catch(function(err) {
+                    })
+                    .catch(function(err) {
                     console.error('ServiceWorker registration failed: ', err);
-                });
+                    });
             });
         }
         
@@ -2232,7 +2232,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             
             // Add active class to clicked tab
             if (event && event.target) {
-                event.target.classList.add('active');
+            event.target.classList.add('active');
             } else {
                 // Fallback: find tab button by tabName
                 document.querySelectorAll('.tab').forEach(tab => {
@@ -2254,12 +2254,20 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 console.log('Map tab clicked, loading map...');
                 // Small delay to ensure tab is visible
                 setTimeout(() => {
-                    loadMap();
+                loadMap();
                 }, 100);
             } else if (tabName === 'audit') {
                 loadAudit();
             } else if (tabName === 'board') {
                 loadSharedBoard();
+            }
+        }
+        
+        // Update row color when color input changes
+        function updateRowColorFromInput(colorInput) {
+            const row = colorInput.closest('tr');
+            if (row && colorInput.value) {
+                row.style.backgroundColor = colorInput.value + '20'; // 20 = 12.5% opacity in hex
             }
         }
         
@@ -2300,8 +2308,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     setTimeout(() => row.classList.remove('saved'), 2000);
                     
                     // Update row background color if color field changed
-                    if (field === 'color') {
-                        row.style.backgroundColor = value + '20';
+                    if (field === 'color' && value) {
+                        row.style.backgroundColor = value + '20'; // 20 = 12.5% opacity in hex
                     }
                     
                     // Show success indicator
@@ -2471,7 +2479,13 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         // Add new row
         function addNewRow() {
             const tbody = document.getElementById('features-tbody');
+            if (!tbody) {
+                showNotification('❌ לא נמצא טבלה', 'error');
+                return;
+            }
             const row = document.createElement('tr');
+            const defaultColor = '#3498db';
+            row.style.backgroundColor = defaultColor + '20'; // Set initial background color
             row.innerHTML = `
                 <td>
                     <select class="editable" data-field="category" onchange="saveNewRow(this)">
@@ -2488,7 +2502,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         <textarea class="editable description-edit" data-field="description" onblur="saveNewRow(this)" rows="2" placeholder="תיאור"></textarea>
                     </div>
                 </td>
-                <td><input type="color" class="color-input editable" data-field="color" value="#3498db" onchange="saveNewRow(this)" /></td>
+                <td><input type="color" class="color-input editable" data-field="color" value="#3498db" onchange="updateRowColorFromInput(this); saveNewRow(this);" /></td>
                 <td>-</td>
                 <td>-</td>
                 <td><button class="delete-btn" onclick="this.closest('tr').remove()">
@@ -2851,20 +2865,57 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             }
         }
         
-        // Search functionality
+        // Enhanced search functionality - searches all columns including inputs, selects, textareas
         function filterTable() {
             const input = document.getElementById('search-input');
-            const filter = input.value.toLowerCase();
+            if (!input) return;
+            const filter = input.value.toLowerCase().trim();
             const table = document.getElementById('features-table');
+            if (!table) return;
             const tr = table.getElementsByTagName('tr');
             
+            // If filter is empty, show all rows
+            if (!filter) {
+                for (let i = 1; i < tr.length; i++) {
+                    tr[i].style.display = '';
+                }
+                return;
+            }
+            
+            // Search in all columns including custom columns
             for (let i = 1; i < tr.length; i++) {
                 const td = tr[i].getElementsByTagName('td');
                 let found = false;
                 
+                // Search in all cells including inputs, selects, textareas
                 for (let j = 0; j < td.length; j++) {
-                    const txtValue = td[j].textContent || td[j].innerText;
-                    if (txtValue.toLowerCase().indexOf(filter) > -1) {
+                    const cell = td[j];
+                    let txtValue = '';
+                    
+                    // Get text from various input types
+                    const textInput = cell.querySelector('input[type="text"], input[type="number"], input[type="date"]');
+                    const select = cell.querySelector('select');
+                    const textarea = cell.querySelector('textarea');
+                    const colorInput = cell.querySelector('input[type="color"]');
+                    
+                    if (textInput) {
+                        txtValue = (textInput.value || textInput.placeholder || '').toLowerCase();
+                    } else if (select) {
+                        txtValue = (select.options[select.selectedIndex]?.text || '').toLowerCase();
+                    } else if (textarea) {
+                        txtValue = (textarea.value || textarea.placeholder || '').toLowerCase();
+                    } else if (colorInput) {
+                        txtValue = colorInput.value.toLowerCase();
+                    } else {
+                        // Regular text content
+                        txtValue = (cell.textContent || cell.innerText || '').toLowerCase();
+                    }
+                    
+                    // Also check data attributes
+                    const dataValue = (cell.getAttribute('data-value') || '').toLowerCase();
+                    const allText = txtValue + ' ' + dataValue;
+                    
+                    if (allText.indexOf(filter) > -1) {
                         found = true;
                         break;
                     }
@@ -3038,7 +3089,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     setTimeout(() => {
                         if (data.id) {
                             console.log('Switching to page:', data.id);
-                            switchPage(data.id);
+                    switchPage(data.id);
                         } else {
                             console.log('No page ID, reloading...');
                             window.location.reload();
@@ -3112,20 +3163,20 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 const pin = prompt('הזן קוד PIN לפתיחת הדף:');
                 if (pin === null) return; // User cancelled
                 
-                const formData = new FormData();
-                formData.append('action', 'toggle_page_lock');
-                formData.append('page_id', currentPageId);
+            const formData = new FormData();
+            formData.append('action', 'toggle_page_lock');
+            formData.append('page_id', currentPageId);
                 formData.append('lock_state', newLockState);
                 formData.append('pin', pin || '');
-                
+            
                 fetch('api.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        loadPages();
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadPages();
                         const updatedPage = pages.find(p => p.id == currentPageId);
                         isPageLocked = updatedPage && updatedPage.is_locked;
                         const lockBtn = document.getElementById('lock-btn');
@@ -3506,7 +3557,7 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 btn.innerHTML = mapEditMode ? 
                     '<i class="fas fa-eye" style="margin-left: 6px;"></i> מצב צפייה' : 
                     '<i class="fas fa-edit" style="margin-left: 6px;"></i> מצב עריכה';
-                btn.style.background = mapEditMode ? '#10b981' : '#2563eb';
+            btn.style.background = mapEditMode ? '#10b981' : '#2563eb';
             }
             
             if (network) {
@@ -3828,22 +3879,22 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                         console.warn('Map tab is not active, network may not render correctly');
                     }
                     
-                    network = new vis.Network(container, networkData, options);
+                network = new vis.Network(container, networkData, options);
                     console.log('Network created successfully, waiting for stabilization...');
-                    
-                    // Node selection
-                    network.on('click', function(params) {
-                        if (params.nodes.length > 0) {
-                            selectedNodeId = params.nodes[0];
+                
+                // Node selection
+                network.on('click', function(params) {
+                    if (params.nodes.length > 0) {
+                        selectedNodeId = params.nodes[0];
                             if (mapEditMode && network && network.body && network.body.data) {
                                 const nodeData = network.body.data.nodes.get(selectedNodeId);
                                 if (nodeData) {
                                     showNotification('צומת נבחר: ' + nodeData.label, 'success');
                                 }
-                            }
                         }
-                    });
-                    
+                    }
+                });
+                
                     // Handle errors
                     network.on('error', function(error) {
                         console.error('Network error:', error);
@@ -3851,10 +3902,10 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     
                     // Wait for stabilization then fit to screen
                     network.once('stabilizationEnd', function() {
-                        setTimeout(() => {
-                            if (network) {
+                setTimeout(() => {
+                    if (network) {
                                 try {
-                                    network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+                        network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
                                 } catch (e) {
                                     console.error('Error fitting network:', e);
                                     try {
@@ -3863,8 +3914,8 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                                         console.error('Error fitting network (fallback):', e2);
                                     }
                                 }
-                            }
-                        }, 100);
+                    }
+                }, 100);
                     });
                     
                     // Also listen for stabilizationIterationsDone as fallback
