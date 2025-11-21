@@ -2231,12 +2231,21 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             
             // Add active class to clicked tab
-            if (event && event.target) {
-            event.target.classList.add('active');
-            } else {
-                // Fallback: find tab button by tabName
+            // Use currentTarget instead of target to get the button even if icon was clicked
+            let clickedButton = null;
+            if (event) {
+                clickedButton = event.currentTarget || event.target.closest('.tab');
+                if (clickedButton && clickedButton.classList.contains('tab')) {
+                    clickedButton.classList.add('active');
+                } else if (event.target && event.target.closest('.tab')) {
+                    event.target.closest('.tab').classList.add('active');
+                }
+            }
+            
+            // Fallback: find tab button by tabName
+            if (!clickedButton || !clickedButton.classList.contains('active')) {
                 document.querySelectorAll('.tab').forEach(tab => {
-                    if (tab.onclick && tab.onclick.toString().includes(tabName)) {
+                    if (tab.getAttribute('onclick') && tab.getAttribute('onclick').includes("'" + tabName + "'")) {
                         tab.classList.add('active');
                     }
                 });
@@ -3979,11 +3988,9 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
         }
         
         function refreshTable(data) {
-            const tbody = document.getElementById('features-tbody');
-            tbody.innerHTML = '';
-            // This would need to be implemented to rebuild the table
-            // For now, just reload
-            refreshData();
+            // Reload the entire page to ensure all data including custom columns is refreshed
+            // This is the most reliable way to ensure consistency
+            location.reload();
         }
         
         // New Feature Actions Functions
@@ -4101,24 +4108,43 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(comments => {
                 if (!container) container = document.getElementById('comments-list');
+                if (!container) {
+                    console.error('Comments container not found');
+                    return;
+                }
+                if (!Array.isArray(comments)) {
+                    console.error('Invalid comments data:', comments);
+                    container.innerHTML = '<p style="text-align: center; color: var(--error-color); padding: 20px;">❌ שגיאה בטעינת התגובות</p>';
+                    return;
+                }
                 if (comments.length === 0) {
                     container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">אין תגובות עדיין</p>';
                 } else {
                     container.innerHTML = comments.map(comment => `
                         <div class="comment-item">
                             <div class="comment-header">
-                                <span class="comment-user">${escapeHtml(comment.user)}</span>
-                                <span class="comment-date">${formatDate(comment.created_at)}</span>
+                                <span class="comment-user">${escapeHtml(comment.user || 'Unknown')}</span>
+                                <span class="comment-date">${formatDate(comment.created_at || '')}</span>
                             </div>
-                            <div class="comment-body">${autoLink(escapeHtml(comment.comment))}</div>
+                            <div class="comment-body">${autoLink(escapeHtml(comment.comment || ''))}</div>
                         </div>
                     `).join('');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error loading comments:', error);
+                if (container) {
+                    container.innerHTML = '<p style="text-align: center; color: var(--error-color); padding: 20px;">❌ שגיאה בטעינת התגובות</p>';
+                }
+            });
         }
         
         function addComment(featureId) {
@@ -4135,15 +4161,30 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.success) {
                     commentInput.value = '';
-                    loadComments(featureId);
+                    const container = document.getElementById('comments-list');
+                    if (container) {
+                        loadComments(featureId, container);
+                    } else {
+                        loadComments(featureId);
+                    }
                     showNotification('✅ התגובה נוספה', 'success');
+                } else {
+                    showNotification('❌ שגיאה בהוספת התגובה: ' + (data.message || 'שגיאה לא ידועה'), 'error');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error adding comment:', error);
+                showNotification('❌ שגיאה בהוספת התגובה: ' + error.message, 'error');
+            });
         }
         
         // Likes/Dislikes
@@ -4157,13 +4198,23 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(data => {
                 if (data.success) {
                     updateLikeButtons(featureId);
+                } else {
+                    showNotification('❌ שגיאה: ' + (data.message || 'שגיאה לא ידועה'), 'error');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error toggling like:', error);
+                showNotification('❌ שגיאה: ' + error.message, 'error');
+            });
         }
         
         function updateLikeButtons(featureId) {
@@ -4175,21 +4226,32 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(likes => {
+                if (!likes || typeof likes !== 'object') {
+                    console.error('Invalid likes data:', likes);
+                    return;
+                }
                 const likeBtn = document.getElementById('like-btn-' + featureId);
                 const dislikeBtn = document.getElementById('dislike-btn-' + featureId);
                 
                 if (likeBtn) {
                     likeBtn.classList.toggle('active', likes.user_like === 'like');
-                    likeBtn.innerHTML = `👍 ${likes.like}`;
+                    likeBtn.innerHTML = `<i class="fas fa-thumbs-up"></i> ${likes.like || 0}`;
                 }
                 if (dislikeBtn) {
                     dislikeBtn.classList.toggle('active', likes.user_like === 'dislike');
-                    dislikeBtn.innerHTML = `👎 ${likes.dislike}`;
+                    dislikeBtn.innerHTML = `<i class="fas fa-thumbs-down"></i> ${likes.dislike || 0}`;
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error loading likes:', error);
+            });
         }
         
         // Share
