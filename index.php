@@ -4308,18 +4308,32 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.status);
+                }
+                return response.json();
+            })
             .then(attachments => {
                 if (!container) container = document.getElementById('attachments-list');
+                if (!container) {
+                    console.error('Attachments container not found');
+                    return;
+                }
+                if (!Array.isArray(attachments)) {
+                    console.error('Invalid attachments data:', attachments);
+                    container.innerHTML = '<p style="text-align: center; color: var(--error-color); padding: 20px;">❌ שגיאה בטעינת הקבצים</p>';
+                    return;
+                }
                 if (attachments.length === 0) {
                     container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">אין קבצים מצורפים</p>';
                 } else {
                     container.innerHTML = attachments.map(att => `
                         <div class="attachment-item">
-                            ${att.file_type === 'image' ? `<img src="${att.file_path}" class="attachment-preview" alt="${att.file_name}">` : ''}
+                            ${att.file_type === 'image' ? `<img src="${att.file_path}" class="attachment-preview" alt="${escapeHtml(att.file_name || '')}">` : ''}
                             <div style="flex: 1;">
-                                <div><strong>${att.file_name}</strong></div>
-                                <div style="font-size: 12px; color: var(--text-secondary);">${(att.file_size / 1024).toFixed(2)} KB | ${att.created_at}</div>
+                                <div><strong>${escapeHtml(att.file_name || 'Unknown')}</strong></div>
+                                <div style="font-size: 12px; color: var(--text-secondary);">${(att.file_size / 1024).toFixed(2)} KB | ${att.created_at || ''}</div>
                             </div>
                             <a href="${att.file_path}" download class="btn-primary" style="text-decoration: none; padding: 6px 12px;">⬇️ הורד</a>
                             <button class="delete-btn" onclick="deleteAttachment(${att.id}, ${featureId})">🗑️</button>
@@ -4327,7 +4341,12 @@ while ($row = $pagesResult->fetchArray(SQLITE3_ASSOC)) {
                     `).join('');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => {
+                console.error('Error loading attachments:', error);
+                if (container) {
+                    container.innerHTML = '<p style="text-align: center; color: var(--error-color); padding: 20px;">❌ שגיאה בטעינת הקבצים</p>';
+                }
+            });
         }
         
         function uploadAttachment(featureId) {
